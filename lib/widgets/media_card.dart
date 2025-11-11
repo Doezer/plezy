@@ -20,6 +20,7 @@ class MediaCard extends StatefulWidget {
   final double? height;
   final void Function(String ratingKey)? onRefresh;
   final bool forceGridMode;
+  final bool isInContinueWatching;
 
   const MediaCard({
     super.key,
@@ -28,6 +29,7 @@ class MediaCard extends StatefulWidget {
     this.height,
     this.onRefresh,
     this.forceGridMode = false,
+    this.isInContinueWatching = false,
   });
 
   @override
@@ -100,6 +102,7 @@ class _MediaCardState extends State<MediaCard> {
       metadata: widget.item,
       onRefresh: widget.onRefresh,
       onTap: () => _handleTap(context),
+      isInContinueWatching: widget.isInContinueWatching,
       child: viewMode == ViewMode.grid
           ? _MediaCardGrid(
               item: widget.item,

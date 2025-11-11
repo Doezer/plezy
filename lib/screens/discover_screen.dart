@@ -627,7 +627,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                     ),
                   ),
                 ),
-                _buildHorizontalList(_onDeck, isLarge: false),
+                _buildHorizontalList(_onDeck, isLarge: false, isInContinueWatching: true),
               ],
 
 
@@ -1236,6 +1236,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   Widget _buildHorizontalList(
     List<PlexMetadata> items, {
     bool isLarge = false,
+    bool isInContinueWatching = false,
   }) {
     return SliverToBoxAdapter(
       child: LayoutBuilder(
@@ -1279,6 +1280,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                       height: posterHeight,
                       onRefresh: updateItem,
                       forceGridMode: true,
+                      isInContinueWatching: isInContinueWatching,
                     ),
                   );
                 },

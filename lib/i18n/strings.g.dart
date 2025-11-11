@@ -4,9 +4,9 @@
 /// To regenerate, run: `dart run slang`
 ///
 /// Locales: 2
-/// Strings: 618 (309 per locale)
+/// Strings: 622 (311 per locale)
 ///
-/// Built on 2025-11-10 at 08:56 UTC
+/// Built on 2025-11-11 at 20:28 UTC
 
 // coverage:ignore-file
 // ignore_for_file: type=lint
@@ -425,6 +425,7 @@ class _StringsMediaMenuEn {
 	// Translations
 	String get markAsWatched => 'Mark as Watched';
 	String get markAsUnwatched => 'Mark as Unwatched';
+	String get removeFromContinueWatching => 'Remove from Continue Watching';
 	String get goToSeries => 'Go to series';
 	String get goToSeason => 'Go to season';
 	String get shufflePlay => 'Shuffle Play';
@@ -486,6 +487,7 @@ class _StringsMessagesEn {
 	// Translations
 	String get markedAsWatched => 'Marked as watched';
 	String get markedAsUnwatched => 'Marked as unwatched';
+	String get removedFromContinueWatching => 'Removed from Continue Watching';
 	String errorLoading({required Object error}) => 'Error: ${error}';
 	String get fileInfoNotAvailable => 'File information not available';
 	String errorLoadingFileInfo({required Object error}) => 'Error loading file info: ${error}';
@@ -1030,6 +1032,7 @@ class _StringsMediaMenuSv implements _StringsMediaMenuEn {
 	// Translations
 	@override String get markAsWatched => 'Markera som sedd';
 	@override String get markAsUnwatched => 'Markera som osedd';
+	@override String get removeFromContinueWatching => 'Ta bort från Fortsätt titta';
 	@override String get goToSeries => 'Gå till serie';
 	@override String get goToSeason => 'Gå till säsong';
 	@override String get shufflePlay => 'Blanda uppspelning';
@@ -1091,6 +1094,7 @@ class _StringsMessagesSv implements _StringsMessagesEn {
 	// Translations
 	@override String get markedAsWatched => 'Markerad som sedd';
 	@override String get markedAsUnwatched => 'Markerad som osedd';
+	@override String get removedFromContinueWatching => 'Borttagen från Fortsätt titta';
 	@override String errorLoading({required Object error}) => 'Fel: ${error}';
 	@override String get fileInfoNotAvailable => 'Filinformation inte tillgänglig';
 	@override String errorLoadingFileInfo({required Object error}) => 'Fel vid laddning av filinformation: ${error}';

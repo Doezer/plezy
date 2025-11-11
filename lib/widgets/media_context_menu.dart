@@ -24,6 +24,7 @@ class MediaContextMenu extends StatefulWidget {
   final void Function(String ratingKey)? onRefresh;
   final VoidCallback? onTap;
   final Widget child;
+  final bool isInContinueWatching;
 
   const MediaContextMenu({
     super.key,
@@ -31,6 +32,7 @@ class MediaContextMenu extends StatefulWidget {
     this.onRefresh,
     this.onTap,
     required this.child,
+    this.isInContinueWatching = false,
   });
 
   @override
@@ -79,6 +81,19 @@ class _MediaContextMenuState extends State<MediaContextMenu> {
           value: 'unwatch',
           icon: Icons.remove_circle_outline,
           label: t.mediaMenu.markAsUnwatched,
+        ),
+      );
+    }
+
+    // Remove from Continue Watching (only in continue watching section with progress)
+    if (widget.isInContinueWatching &&
+        widget.metadata.viewOffset != null &&
+        widget.metadata.viewOffset! > 0) {
+      menuActions.add(
+        _MenuAction(
+          value: 'remove_from_continue_watching',
+          icon: Icons.close,
+          label: t.mediaMenu.removeFromContinueWatching,
         ),
       );
     }
@@ -224,6 +239,14 @@ class _MediaContextMenuState extends State<MediaContextMenu> {
           context,
           () => client.markAsUnwatched(widget.metadata.ratingKey),
           t.messages.markedAsUnwatched,
+        );
+        break;
+
+      case 'remove_from_continue_watching':
+        await _executeAction(
+          context,
+          () => client.markAsUnwatched(widget.metadata.ratingKey),
+          t.messages.removedFromContinueWatching,
         );
         break;
 
