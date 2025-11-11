@@ -241,18 +241,40 @@ class _MediaContextMenuState extends State<MediaContextMenu> {
         break;
 
       case 'remove_from_continue_watching':
-        // For items with progress: mark as unwatched to reset progress
-        // For unwatched items (next episodes): mark as watched to skip them
-        final hasProgress = widget.metadata.viewOffset != null && 
-                           widget.metadata.viewOffset! > 0;
-        
-        await _executeAction(
-          context,
-          () => hasProgress 
-              ? client.markAsUnwatched(widget.metadata.ratingKey)
-              : client.markAsWatched(widget.metadata.ratingKey),
-          t.messages.removedFromContinueWatching,
-        );
+        // Remove from Continue Watching by marking as watched,
+        // then restore original progress if it existed
+        try {
+          final originalViewOffset = widget.metadata.viewOffset;
+          final duration = widget.metadata.duration;
+          
+          // Mark as watched to remove from Continue Watching
+          await client.markAsWatched(widget.metadata.ratingKey);
+          
+          // If item had progress, restore it
+          if (originalViewOffset != null && 
+              originalViewOffset > 0 && 
+              duration != null) {
+            await client.updateProgress(
+              widget.metadata.ratingKey,
+              time: originalViewOffset,
+              state: 'stopped',
+              duration: duration,
+            );
+          }
+          
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(t.messages.removedFromContinueWatching)),
+            );
+            widget.onRefresh?.call(widget.metadata.ratingKey);
+          }
+        } catch (e) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(t.messages.errorLoading(error: e.toString()))),
+            );
+          }
+        }
         break;
 
       case 'series':
