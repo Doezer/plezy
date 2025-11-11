@@ -85,10 +85,8 @@ class _MediaContextMenuState extends State<MediaContextMenu> {
       );
     }
 
-    // Remove from Continue Watching (only in continue watching section with progress)
-    if (widget.isInContinueWatching &&
-        widget.metadata.viewOffset != null &&
-        widget.metadata.viewOffset! > 0) {
+    // Remove from Continue Watching (only in continue watching section)
+    if (widget.isInContinueWatching) {
       menuActions.add(
         _MenuAction(
           value: 'remove_from_continue_watching',
@@ -243,9 +241,16 @@ class _MediaContextMenuState extends State<MediaContextMenu> {
         break;
 
       case 'remove_from_continue_watching':
+        // For items with progress: mark as unwatched to reset progress
+        // For unwatched items (next episodes): mark as watched to skip them
+        final hasProgress = widget.metadata.viewOffset != null && 
+                           widget.metadata.viewOffset! > 0;
+        
         await _executeAction(
           context,
-          () => client.markAsUnwatched(widget.metadata.ratingKey),
+          () => hasProgress 
+              ? client.markAsUnwatched(widget.metadata.ratingKey)
+              : client.markAsWatched(widget.metadata.ratingKey),
           t.messages.removedFromContinueWatching,
         );
         break;
