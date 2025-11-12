@@ -246,12 +246,10 @@ class _MediaContextMenuState extends State<MediaContextMenu> {
         // This is an atomic operation - if either step fails, we rollback
         final originalViewOffset = widget.metadata.viewOffset;
         final duration = widget.metadata.duration;
-        bool markedAsWatched = false;
         
         try {
           // Step 1: Mark as watched to remove from Continue Watching
           await client.markAsWatched(widget.metadata.ratingKey);
-          markedAsWatched = true;
           
           // Step 2: If item had progress, restore it
           if (originalViewOffset != null && 
@@ -266,8 +264,12 @@ class _MediaContextMenuState extends State<MediaContextMenu> {
               );
             } catch (progressError) {
               // Rollback: restore to unwatched state
-              await client.markAsUnwatched(widget.metadata.ratingKey);
-              markedAsWatched = false;
+              try {
+                await client.markAsUnwatched(widget.metadata.ratingKey);
+              } catch (rollbackError) {
+                // Log rollback failure but preserve original error
+                appLogger.e('Rollback failed after progress update error', error: rollbackError);
+              }
               rethrow;
             }
           }
