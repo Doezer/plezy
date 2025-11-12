@@ -243,25 +243,36 @@ class _MediaContextMenuState extends State<MediaContextMenu> {
       case 'remove_from_continue_watching':
         // Remove from Continue Watching by marking as watched,
         // then restore original progress if it existed
+        // This is an atomic operation - if either step fails, we rollback
+        final originalViewOffset = widget.metadata.viewOffset;
+        final duration = widget.metadata.duration;
+        bool markedAsWatched = false;
+        
         try {
-          final originalViewOffset = widget.metadata.viewOffset;
-          final duration = widget.metadata.duration;
-          
-          // Mark as watched to remove from Continue Watching
+          // Step 1: Mark as watched to remove from Continue Watching
           await client.markAsWatched(widget.metadata.ratingKey);
+          markedAsWatched = true;
           
-          // If item had progress, restore it
+          // Step 2: If item had progress, restore it
           if (originalViewOffset != null && 
               originalViewOffset > 0 && 
               duration != null) {
-            await client.updateProgress(
-              widget.metadata.ratingKey,
-              time: originalViewOffset,
-              state: 'stopped',
-              duration: duration,
-            );
+            try {
+              await client.updateProgress(
+                widget.metadata.ratingKey,
+                time: originalViewOffset,
+                state: 'stopped',
+                duration: duration,
+              );
+            } catch (progressError) {
+              // Rollback: restore to unwatched state
+              await client.markAsUnwatched(widget.metadata.ratingKey);
+              markedAsWatched = false;
+              rethrow;
+            }
           }
           
+          // Success - show confirmation and refresh
           if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text(t.messages.removedFromContinueWatching)),
@@ -269,9 +280,20 @@ class _MediaContextMenuState extends State<MediaContextMenu> {
             widget.onRefresh?.call(widget.metadata.ratingKey);
           }
         } catch (e) {
+          // Error handling with retry option
           if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(t.messages.errorLoading(error: e.toString()))),
+              SnackBar(
+                content: Text(t.messages.errorLoading(error: e.toString())),
+                action: SnackBarAction(
+                  label: t.common.retry,
+                  onPressed: () {
+                    // Retry the operation
+                    _showContextMenu(context);
+                  },
+                ),
+                duration: const Duration(seconds: 5),
+              ),
             );
           }
         }
