@@ -168,7 +168,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
 
   @override
   Widget build(BuildContext context) {
-    final isTV = PlatformDetector.isTV(context);
+    final isTV = PlatformDetector.isTVSync();
 
     return SizedBox(
       width: widget.width,
