@@ -181,8 +181,8 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
           onKey: (node, event) {
             // Handle Enter key on TV
             if (isTV && event is KeyDownEvent) {
-              if (event.logicalKey.keyLabel == 'Select' ||
-                  event.logicalKey.keyLabel == 'Enter') {
+              if (event.logicalKey == LogicalKeyboardKey.select ||
+                  event.logicalKey == LogicalKeyboardKey.enter) {
                 widget.onTap();
                 return KeyEventResult.handled;
               }
