@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
 import '../models/plex_metadata.dart';
@@ -8,6 +9,7 @@ import '../services/settings_service.dart';
 import '../utils/provider_extensions.dart';
 import '../utils/video_player_navigation.dart';
 import '../utils/content_rating_formatter.dart';
+import '../utils/platform_detector.dart';
 import '../screens/media_detail_screen.dart';
 import '../screens/season_detail_screen.dart';
 import '../theme/theme_helper.dart';
@@ -123,7 +125,7 @@ class _MediaCardState extends State<MediaCard> {
 }
 
 /// Grid layout for media cards
-class _MediaCardGrid extends StatelessWidget {
+class _MediaCardGrid extends StatefulWidget {
   final PlexMetadata item;
   final double? width;
   final double? height;
@@ -137,37 +139,95 @@ class _MediaCardGrid extends StatelessWidget {
   });
 
   @override
+  State<_MediaCardGrid> createState() => _MediaCardGridState();
+}
+
+class _MediaCardGridState extends State<_MediaCardGrid> {
+  final FocusNode _focusNode = FocusNode();
+  bool _isFocused = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode.addListener(_onFocusChange);
+  }
+
+  @override
+  void dispose() {
+    _focusNode.removeListener(_onFocusChange);
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _onFocusChange() {
+    setState(() {
+      _isFocused = _focusNode.hasFocus;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final isTV = PlatformDetector.isTV(context);
+
     return SizedBox(
-      width: width,
+      width: widget.width,
       child: Semantics(
-        label: "media-card-${item.ratingKey}",
-        identifier: "media-card-${item.ratingKey}",
+        label: "media-card-${widget.item.ratingKey}",
+        identifier: "media-card-${widget.item.ratingKey}",
         button: true,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Poster
-                if (height != null)
-                  SizedBox(
-                    width: double.infinity,
-                    height: height,
-                    child: _buildPosterWithOverlay(context),
-                  )
-                else
-                  Expanded(child: _buildPosterWithOverlay(context)),
-                const SizedBox(height: 4),
-                // Text content
-                Column(
+        child: Focus(
+          focusNode: _focusNode,
+          onKey: (node, event) {
+            // Handle Enter key on TV
+            if (isTV && event is KeyDownEvent) {
+              if (event.logicalKey.keyLabel == 'Select' ||
+                  event.logicalKey.keyLabel == 'Enter') {
+                widget.onTap();
+                return KeyEventResult.handled;
+              }
+            }
+            return KeyEventResult.ignored;
+          },
+          child: AnimatedScale(
+            scale: _isFocused && isTV ? 1.08 : 1.0,
+            duration: const Duration(milliseconds: 150),
+            curve: Curves.easeOut,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                border: _isFocused && isTV
+                    ? Border.all(
+                        color: Theme.of(context).colorScheme.primary,
+                        width: 3,
+                      )
+                    : null,
+              ),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: widget.onTap,
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Poster
+                      if (widget.height != null)
+                        SizedBox(
+                          width: double.infinity,
+                          height: widget.height,
+                          child: _buildPosterWithOverlay(context),
+                        )
+                      else
+                        Expanded(child: _buildPosterWithOverlay(context)),
+                      const SizedBox(height: 4),
+                      // Text content
+                      Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.start,
                   children: [
                     Text(
-                      item.displayTitle,
+                      widget.item.displayTitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -176,9 +236,9 @@ class _MediaCardGrid extends StatelessWidget {
                         height: 1.1,
                       ),
                     ),
-                    if (item.displaySubtitle != null)
+                    if (widget.item.displaySubtitle != null)
                       Text(
-                        item.displaySubtitle!,
+                        widget.item.displaySubtitle!,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -187,9 +247,9 @@ class _MediaCardGrid extends StatelessWidget {
                           height: 1.1,
                         ),
                       )
-                    else if (item.parentTitle != null)
+                    else if (widget.item.parentTitle != null)
                       Text(
-                        item.parentTitle!,
+                        widget.item.parentTitle!,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -198,9 +258,9 @@ class _MediaCardGrid extends StatelessWidget {
                           height: 1.1,
                         ),
                       )
-                    else if (item.year != null)
+                    else if (widget.item.year != null)
                       Text(
-                        '${item.year}',
+                        '${widget.item.year}',
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: tokens(context).textMuted,
                           fontSize: 11,
@@ -231,7 +291,7 @@ class _MediaCardGrid extends StatelessWidget {
 
   Widget _buildPosterImage(BuildContext context) {
     final useSeasonPoster = context.watch<SettingsProvider>().useSeasonPoster;
-    final posterUrl = item.posterThumb(useSeasonPoster: useSeasonPoster);
+    final posterUrl = widget.item.posterThumb(useSeasonPoster: useSeasonPoster);
     if (posterUrl != null) {
       return Consumer<PlexClientProvider>(
         builder: (context, clientProvider, child) {
@@ -375,8 +435,8 @@ class _MediaCardList extends StatelessWidget {
     }
 
     // Add year
-    if (item.year != null) {
-      parts.add('${item.year}');
+    if (widget.item.year != null) {
+      parts.add('${widget.item.year}');
     }
 
     // Add duration
@@ -404,10 +464,10 @@ class _MediaCardList extends StatelessWidget {
     }
 
     // Otherwise use existing subtitle logic
-    if (item.displaySubtitle != null) {
-      return item.displaySubtitle;
-    } else if (item.parentTitle != null) {
-      return item.parentTitle;
+    if (widget.item.displaySubtitle != null) {
+      return widget.item.displaySubtitle;
+    } else if (widget.item.parentTitle != null) {
+      return widget.item.parentTitle;
     }
 
     // Year is now shown in metadata line, so don't show it here
@@ -453,7 +513,7 @@ class _MediaCardList extends StatelessWidget {
                   children: [
                     // Title
                     Text(
-                      item.displayTitle,
+                      widget.item.displayTitle,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
