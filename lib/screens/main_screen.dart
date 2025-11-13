@@ -3,6 +3,7 @@ import '../client/plex_client.dart';
 import '../i18n/strings.g.dart';
 import '../utils/app_logger.dart';
 import '../utils/provider_extensions.dart';
+import '../utils/platform_detector.dart';
 import '../main.dart';
 import '../mixins/refreshable.dart';
 import 'discover_screen.dart';
@@ -115,6 +116,59 @@ class _MainScreenState extends State<MainScreen> with RouteAware {
 
   @override
   Widget build(BuildContext context) {
+    final isTV = PlatformDetector.isTV(context);
+
+    // Use NavigationRail for TV, NavigationBar for other devices
+    if (isTV) {
+      return Scaffold(
+        body: Row(
+          children: [
+            NavigationRail(
+              selectedIndex: _currentIndex,
+              onDestinationSelected: (index) {
+                setState(() {
+                  _currentIndex = index;
+                });
+                // Notify discover screen when it becomes visible via tab switch
+                if (index == 0) {
+                  _onDiscoverBecameVisible();
+                }
+              },
+              labelType: NavigationRailLabelType.all,
+              minWidth: 80,
+              destinations: [
+                NavigationRailDestination(
+                  icon: const Icon(Icons.home_outlined),
+                  selectedIcon: const Icon(Icons.home),
+                  label: Text(t.navigation.home),
+                ),
+                NavigationRailDestination(
+                  icon: const Icon(Icons.video_library_outlined),
+                  selectedIcon: const Icon(Icons.video_library),
+                  label: Text(t.navigation.libraries),
+                ),
+                NavigationRailDestination(
+                  icon: const Icon(Icons.search),
+                  selectedIcon: const Icon(Icons.search),
+                  label: Text(t.navigation.search),
+                ),
+                NavigationRailDestination(
+                  icon: const Icon(Icons.settings_outlined),
+                  selectedIcon: const Icon(Icons.settings),
+                  label: Text(t.navigation.settings),
+                ),
+              ],
+            ),
+            const VerticalDivider(thickness: 1, width: 1),
+            Expanded(
+              child: IndexedStack(index: _currentIndex, children: _screens),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Default mobile/tablet layout with bottom navigation
     return Scaffold(
       body: IndexedStack(index: _currentIndex, children: _screens),
       bottomNavigationBar: NavigationBar(
