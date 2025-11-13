@@ -208,7 +208,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                 borderRadius: BorderRadius.circular(8),
                 onTap: widget.onTap,
                 child: Padding(
-                  padding: TVUIHelper.getCardPadding(context),
+                  padding: TVUIHelper.getCardPadding(),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -221,7 +221,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                         )
                       else
                         Expanded(child: _buildPosterWithOverlay(context)),
-                      SizedBox(height: TVUIHelper.getSpacing(context, 4)),
+                      SizedBox(height: TVUIHelper.getSpacing(4)),
                       // Text content
                       Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -233,7 +233,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontWeight: FontWeight.w600,
-                        fontSize: 13,
+                        fontSize: TVUIHelper.getFontSize(13),
                         height: 1.1,
                       ),
                     ),
@@ -244,7 +244,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: tokens(context).textMuted,
-                          fontSize: 11,
+                          fontSize: TVUIHelper.getFontSize(11),
                           height: 1.1,
                         ),
                       )
@@ -255,7 +255,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: tokens(context).textMuted,
-                          fontSize: TVUIHelper.getFontSize(context, 11),
+                          fontSize: TVUIHelper.getFontSize(11),
                           height: 1.1,
                         ),
                       )
@@ -264,7 +264,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                         '${widget.item.year}',
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: tokens(context).textMuted,
-                          fontSize: 11,
+                          fontSize: TVUIHelper.getFontSize(11),
                           height: 1.1,
                         ),
                       ),

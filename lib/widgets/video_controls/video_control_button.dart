@@ -67,7 +67,7 @@ class _VideoControlButtonState extends State<VideoControlButton> {
     // Determine the effective color: explicit color > active amber > default white
     final effectiveColor = widget.color ?? (widget.isActive ? Colors.amber : Colors.white);
     final isTV = PlatformDetector.isTVSync();
-    final minSize = isTV ? TVUIHelper.getMinTouchTarget(context) : 40.0;
+    final minSize = isTV ? TVUIHelper.getMinTouchTarget() : 40.0;
 
     return Focus(
       focusNode: _focusNode,
