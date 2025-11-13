@@ -10,6 +10,7 @@ import '../utils/provider_extensions.dart';
 import '../utils/video_player_navigation.dart';
 import '../utils/content_rating_formatter.dart';
 import '../utils/platform_detector.dart';
+import '../utils/tv_ui_helper.dart';
 import '../screens/media_detail_screen.dart';
 import '../screens/season_detail_screen.dart';
 import '../theme/theme_helper.dart';
@@ -207,7 +208,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                 borderRadius: BorderRadius.circular(8),
                 onTap: widget.onTap,
                 child: Padding(
-                  padding: const EdgeInsets.all(8),
+                  padding: TVUIHelper.getCardPadding(context),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -220,7 +221,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                         )
                       else
                         Expanded(child: _buildPosterWithOverlay(context)),
-                      const SizedBox(height: 4),
+                      SizedBox(height: TVUIHelper.getSpacing(context, 4)),
                       // Text content
                       Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -230,7 +231,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                       widget.item.displayTitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w600,
                         fontSize: 13,
                         height: 1.1,
@@ -254,7 +255,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: tokens(context).textMuted,
-                          fontSize: 11,
+                          fontSize: TVUIHelper.getFontSize(context, 11),
                           height: 1.1,
                         ),
                       )
