@@ -955,9 +955,10 @@ class _LibrariesScreenState extends State<LibrariesScreen>
               ),
             )
           else ...[
-            // Library selector chips
-            SliverToBoxAdapter(
-              child: Container(
+            // Library selector chips (hidden on TV since we have separate nav buttons)
+            if (!PlatformDetector.isTVSync())
+              SliverToBoxAdapter(
+                child: Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 16,
                   vertical: 8,
