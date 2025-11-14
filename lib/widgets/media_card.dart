@@ -222,7 +222,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
             return KeyEventResult.ignored;
           },
           child: AnimatedScale(
-            scale: _isFocused && isTV ? 1.03 : 1.0,
+            scale: _isFocused && isTV ? 1.02 : 1.0,
             duration: const Duration(milliseconds: 150),
             curve: Curves.easeOut,
             child: AnimatedContainer(
@@ -232,7 +232,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                 border: _isFocused && isTV
                     ? Border.all(
                         color: Theme.of(context).colorScheme.primary,
-                        width: 2,
+                        width: 1,
                       )
                     : null,
               ),
