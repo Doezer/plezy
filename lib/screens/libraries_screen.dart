@@ -21,9 +21,12 @@ import '../mixins/refreshable.dart';
 import '../mixins/item_updatable.dart';
 import '../theme/theme_helper.dart';
 import '../i18n/strings.g.dart';
+import '../utils/platform_detector.dart';
 
 class LibrariesScreen extends StatefulWidget {
-  const LibrariesScreen({super.key});
+  final String? initialLibraryType; // 'movie' or 'show'
+  
+  const LibrariesScreen({super.key, this.initialLibraryType});
 
   @override
   State<LibrariesScreen> createState() => _LibrariesScreenState();
@@ -141,7 +144,15 @@ class _LibrariesScreenState extends State<LibrariesScreen>
 
         // Find the library by key in visible libraries
         String? libraryKeyToLoad;
-        if (savedLibraryKey != null) {
+        
+        // If initialLibraryType is specified, select first library of that type
+        if (widget.initialLibraryType != null && visibleLibraries.isNotEmpty) {
+          final matchingLibrary = visibleLibraries.firstWhere(
+            (lib) => lib.type.toLowerCase() == widget.initialLibraryType!.toLowerCase(),
+            orElse: () => visibleLibraries.first,
+          );
+          libraryKeyToLoad = matchingLibrary.key;
+        } else if (savedLibraryKey != null) {
           // Check if saved library exists and is visible
           final libraryExists = visibleLibraries.any(
             (lib) => lib.key == savedLibraryKey,
