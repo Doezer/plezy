@@ -97,6 +97,8 @@ class _VideoControlButtonState extends State<VideoControlButton> {
           tooltip: widget.tooltip,
           constraints: BoxConstraints(minWidth: minSize, minHeight: minSize),
           iconSize: isTV ? 28 : 24,
+          autofocus: false,
+          focusNode: isTV ? FocusNode(skipTraversal: true) : null,
         ),
       ),
     );
