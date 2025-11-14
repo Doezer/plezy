@@ -178,7 +178,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
         button: true,
         child: Focus(
           focusNode: _focusNode,
-          onKey: (node, event) {
+          onKeyEvent: (node, event) {
             // Handle Enter key on TV
             if (isTV && event is KeyDownEvent) {
               if (event.logicalKey == LogicalKeyboardKey.select ||
@@ -224,53 +224,56 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                       SizedBox(height: TVUIHelper.getSpacing(4)),
                       // Text content
                       Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.item.displayTitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: TVUIHelper.getFontSize(13),
-                        height: 1.1,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.item.displayTitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: TVUIHelper.getFontSize(13),
+                              height: 1.1,
+                            ),
+                          ),
+                          if (widget.item.displaySubtitle != null)
+                            Text(
+                              widget.item.displaySubtitle!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: tokens(context).textMuted,
+                                fontSize: TVUIHelper.getFontSize(11),
+                                height: 1.1,
+                              ),
+                            )
+                          else if (widget.item.parentTitle != null)
+                            Text(
+                              widget.item.parentTitle!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: tokens(context).textMuted,
+                                fontSize: TVUIHelper.getFontSize(11),
+                                height: 1.1,
+                              ),
+                            )
+                          else if (widget.item.year != null)
+                            Text(
+                              '${widget.item.year}',
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: tokens(context).textMuted,
+                                fontSize: TVUIHelper.getFontSize(11),
+                                height: 1.1,
+                              ),
+                            ),
+                        ],
                       ),
-                    ),
-                    if (widget.item.displaySubtitle != null)
-                      Text(
-                        widget.item.displaySubtitle!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: tokens(context).textMuted,
-                          fontSize: TVUIHelper.getFontSize(11),
-                          height: 1.1,
-                        ),
-                      )
-                    else if (widget.item.parentTitle != null)
-                      Text(
-                        widget.item.parentTitle!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: tokens(context).textMuted,
-                          fontSize: TVUIHelper.getFontSize(11),
-                          height: 1.1,
-                        ),
-                      )
-                    else if (widget.item.year != null)
-                      Text(
-                        '${widget.item.year}',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: tokens(context).textMuted,
-                          fontSize: TVUIHelper.getFontSize(11),
-                          height: 1.1,
-                        ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
-              ],
+              ),
             ),
           ),
         ),
@@ -285,7 +288,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
           borderRadius: BorderRadius.circular(8),
           child: _buildPosterImage(context),
         ),
-        _PosterOverlay(item: item),
+        _PosterOverlay(item: widget.item),
       ],
     );
   }
@@ -436,8 +439,8 @@ class _MediaCardList extends StatelessWidget {
     }
 
     // Add year
-    if (widget.item.year != null) {
-      parts.add('${widget.item.year}');
+    if (item.year != null) {
+      parts.add('${item.year}');
     }
 
     // Add duration
@@ -465,10 +468,10 @@ class _MediaCardList extends StatelessWidget {
     }
 
     // Otherwise use existing subtitle logic
-    if (widget.item.displaySubtitle != null) {
-      return widget.item.displaySubtitle;
-    } else if (widget.item.parentTitle != null) {
-      return widget.item.parentTitle;
+    if (item.displaySubtitle != null) {
+      return item.displaySubtitle;
+    } else if (item.parentTitle != null) {
+      return item.parentTitle;
     }
 
     // Year is now shown in metadata line, so don't show it here
@@ -514,7 +517,7 @@ class _MediaCardList extends StatelessWidget {
                   children: [
                     // Title
                     Text(
-                      widget.item.displayTitle,
+                      item.displayTitle,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
