@@ -221,83 +221,85 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
             duration: const Duration(milliseconds: 150),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(8),
-              border: _isFocused && isTV
-                  ? Border.all(
-                      color: Theme.of(context).colorScheme.primary,
-                        width: 1,
+              boxShadow: _isFocused && isTV
+                  ? [
+                      BoxShadow(
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? Colors.white.withOpacity(0.3)
+                            : Theme.of(context).colorScheme.primary,
+                        spreadRadius: 2,
+                        blurRadius: 0,
+                      ),
+                    ]
+                  : null,
+            ),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: widget.onTap,
+              child: Padding(
+                padding: TVUIHelper.getCardPadding(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Poster
+                    if (widget.height != null)
+                      SizedBox(
+                        width: double.infinity,
+                        height: widget.height,
+                        child: _buildPosterWithOverlay(context),
                       )
-                    : null,
-              ),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: widget.onTap,
-                child: Padding(
-                  padding: TVUIHelper.getCardPadding(),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Poster
-                      if (widget.height != null)
-                        SizedBox(
-                          width: double.infinity,
-                          height: widget.height,
-                          child: _buildPosterWithOverlay(context),
-                        )
-                      else
-                        Flexible(child: _buildPosterWithOverlay(context)),
-                      // Text content
+                    else
+                      Flexible(child: _buildPosterWithOverlay(context)),
+                    // Text content
+                    Text(
+                      widget.item.displayTitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: TVUIHelper.getFontSize(12),
+                        height: 1.0,
+                      ),
+                    ),
+                    if (widget.item.displaySubtitle != null)
                       Text(
-                        widget.item.displayTitle,
+                        widget.item.displaySubtitle!,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: TVUIHelper.getFontSize(12),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: tokens(context).textMuted,
+                          fontSize: TVUIHelper.getFontSize(10),
+                          height: 1.0,
+                        ),
+                      )
+                    else if (widget.item.parentTitle != null)
+                      Text(
+                        widget.item.parentTitle!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: tokens(context).textMuted,
+                          fontSize: TVUIHelper.getFontSize(10),
+                          height: 1.0,
+                        ),
+                      )
+                    else if (widget.item.year != null)
+                      Text(
+                        '${widget.item.year}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: tokens(context).textMuted,
+                          fontSize: TVUIHelper.getFontSize(10),
                           height: 1.0,
                         ),
                       ),
-                      if (widget.item.displaySubtitle != null)
-                        Text(
-                          widget.item.displaySubtitle!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                color: tokens(context).textMuted,
-                                fontSize: TVUIHelper.getFontSize(10),
-                                height: 1.0,
-                              ),
-                        )
-                      else if (widget.item.parentTitle != null)
-                        Text(
-                          widget.item.parentTitle!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                color: tokens(context).textMuted,
-                                fontSize: TVUIHelper.getFontSize(10),
-                                height: 1.0,
-                              ),
-                        )
-                      else if (widget.item.year != null)
-                        Text(
-                          '${widget.item.year}',
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                color: tokens(context).textMuted,
-                                fontSize: TVUIHelper.getFontSize(10),
-                                height: 1.0,
-                              ),
-                        ),
-                    ],
-                  ),
+                  ],
                 ),
               ),
             ),
           ),
         ),
+      ),
     );
   }
 
