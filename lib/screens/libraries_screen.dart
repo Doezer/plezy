@@ -25,7 +25,7 @@ import '../utils/platform_detector.dart';
 
 class LibrariesScreen extends StatefulWidget {
   final String? initialLibraryType; // 'movie' or 'show'
-  
+
   const LibrariesScreen({super.key, this.initialLibraryType});
 
   @override
@@ -144,11 +144,13 @@ class _LibrariesScreenState extends State<LibrariesScreen>
 
         // Find the library by key in visible libraries
         String? libraryKeyToLoad;
-        
+
         // If initialLibraryType is specified, select first library of that type
         if (widget.initialLibraryType != null && visibleLibraries.isNotEmpty) {
           final matchingLibrary = visibleLibraries.firstWhere(
-            (lib) => lib.type.toLowerCase() == widget.initialLibraryType!.toLowerCase(),
+            (lib) =>
+                lib.type.toLowerCase() ==
+                widget.initialLibraryType!.toLowerCase(),
             orElse: () => visibleLibraries.first,
           );
           libraryKeyToLoad = matchingLibrary.key;
@@ -970,61 +972,61 @@ class _LibrariesScreenState extends State<LibrariesScreen>
             if (!PlatformDetector.isTVSync())
               SliverToBoxAdapter(
                 child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
-                ),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: List.generate(visibleLibraries.length, (index) {
-                      final library = visibleLibraries[index];
-                      final isSelected = library.key == _selectedLibraryKey;
-                      final t = tokens(context);
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: ContextMenuWrapper(
-                          menuItems: _getLibraryMenuItems(library),
-                          onMenuItemSelected: (value) =>
-                              _handleLibraryMenuAction(value, library),
-                          onTap: () => _loadLibraryContent(library.key),
-                          child: ChoiceChip(
-                            label: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  _getLibraryIcon(library.type),
-                                  size: 16,
-                                  color: isSelected ? t.bg : t.text,
-                                ),
-                                const SizedBox(width: 6),
-                                Text(library.title),
-                              ],
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: List.generate(visibleLibraries.length, (index) {
+                        final library = visibleLibraries[index];
+                        final isSelected = library.key == _selectedLibraryKey;
+                        final t = tokens(context);
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ContextMenuWrapper(
+                            menuItems: _getLibraryMenuItems(library),
+                            onMenuItemSelected: (value) =>
+                                _handleLibraryMenuAction(value, library),
+                            onTap: () => _loadLibraryContent(library.key),
+                            child: ChoiceChip(
+                              label: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    _getLibraryIcon(library.type),
+                                    size: 16,
+                                    color: isSelected ? t.bg : t.text,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(library.title),
+                                ],
+                              ),
+                              selected: isSelected,
+                              onSelected: (selected) {
+                                if (selected) {
+                                  _loadLibraryContent(library.key);
+                                }
+                              },
+                              backgroundColor: t.surface,
+                              selectedColor: t.text,
+                              side: BorderSide(color: t.outline),
+                              labelStyle: TextStyle(
+                                color: isSelected ? t.bg : t.text,
+                                fontWeight: isSelected
+                                    ? FontWeight.w600
+                                    : FontWeight.w400,
+                              ),
+                              showCheckmark: false,
                             ),
-                            selected: isSelected,
-                            onSelected: (selected) {
-                              if (selected) {
-                                _loadLibraryContent(library.key);
-                              }
-                            },
-                            backgroundColor: t.surface,
-                            selectedColor: t.text,
-                            side: BorderSide(color: t.outline),
-                            labelStyle: TextStyle(
-                              color: isSelected ? t.bg : t.text,
-                              fontWeight: isSelected
-                                  ? FontWeight.w600
-                                  : FontWeight.w400,
-                            ),
-                            showCheckmark: false,
                           ),
-                        ),
-                      );
-                    }),
+                        );
+                      }),
+                    ),
                   ),
                 ),
               ),
-            ),
 
             // Content grid
             if (_isLoadingItems && _items.isEmpty)
@@ -1168,15 +1170,15 @@ class _LibrariesScreenState extends State<LibrariesScreen>
 
       switch (density) {
         case LibraryDensity.comfortable:
-          divisor = 4.0;  // Larger cards
+          divisor = 4.0; // Larger cards
           maxItemWidth = 350;
           break;
         case LibraryDensity.normal:
-          divisor = 5.0;  // Medium cards
+          divisor = 5.0; // Medium cards
           maxItemWidth = 280;
           break;
         case LibraryDensity.compact:
-          divisor = 6.5;  // Smaller but still readable
+          divisor = 6.5; // Smaller but still readable
           maxItemWidth = 220;
           break;
       }

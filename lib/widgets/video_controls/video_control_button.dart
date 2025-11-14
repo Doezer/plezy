@@ -65,7 +65,8 @@ class _VideoControlButtonState extends State<VideoControlButton> {
   @override
   Widget build(BuildContext context) {
     // Determine the effective color: explicit color > active amber > default white
-    final effectiveColor = widget.color ?? (widget.isActive ? Colors.amber : Colors.white);
+    final effectiveColor =
+        widget.color ?? (widget.isActive ? Colors.amber : Colors.white);
     final isTV = PlatformDetector.isTVSync();
     final minSize = isTV ? TVUIHelper.getMinTouchTarget() : 40.0;
 
@@ -87,10 +88,7 @@ class _VideoControlButtonState extends State<VideoControlButton> {
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           border: _isFocused && isTV
-              ? Border.all(
-                  color: Colors.white,
-                  width: 2,
-                )
+              ? Border.all(color: Colors.white, width: 2)
               : null,
         ),
         child: IconButton(
