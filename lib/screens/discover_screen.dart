@@ -509,9 +509,12 @@ class _DiscoverScreenState extends State<DiscoverScreen>
               shadowColor: Colors.transparent,
               scrolledUnderElevation: 0,
               actions: [
-                IconButton(
-                  icon: const Icon(Icons.refresh),
-                  onPressed: _loadContent,
+                Focus(
+                  canRequestFocus: !PlatformDetector.isTVSync(),
+                  child: IconButton(
+                    icon: const Icon(Icons.refresh),
+                    onPressed: _loadContent,
+                  ),
                 ),
                 Consumer<UserProfileProvider>(
                   builder: (context, userProvider, child) {
