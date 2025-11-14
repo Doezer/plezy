@@ -210,7 +210,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                 _longPressTimer?.cancel();
                 final wasLongPress = _isLongPress;
                 _isLongPress = false;
-                
+
                 // Only trigger tap if it wasn't a long press
                 if (!wasLongPress) {
                   widget.onTap();
