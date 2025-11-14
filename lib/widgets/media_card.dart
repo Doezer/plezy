@@ -190,7 +190,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
             return KeyEventResult.ignored;
           },
           child: AnimatedScale(
-            scale: _isFocused && isTV ? 1.08 : 1.0,
+            scale: _isFocused && isTV ? 1.05 : 1.0,
             duration: const Duration(milliseconds: 150),
             curve: Curves.easeOut,
             child: AnimatedContainer(
@@ -200,7 +200,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                 border: _isFocused && isTV
                     ? Border.all(
                         color: Theme.of(context).colorScheme.primary,
-                        width: 3,
+                        width: 2,
                       )
                     : null,
               ),
@@ -211,6 +211,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                   padding: TVUIHelper.getCardPadding(),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       // Poster
                       if (widget.height != null)
@@ -220,56 +221,51 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                           child: _buildPosterWithOverlay(context),
                         )
                       else
-                        Expanded(child: _buildPosterWithOverlay(context)),
-                      SizedBox(height: TVUIHelper.getSpacing(4)),
+                        Flexible(
+                          child: _buildPosterWithOverlay(context),
+                        ),
                       // Text content
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.start,
-                        children: [
-                          Text(
-                            widget.item.displayTitle,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: TVUIHelper.getFontSize(13),
-                              height: 1.1,
-                            ),
-                          ),
-                          if (widget.item.displaySubtitle != null)
-                            Text(
-                              widget.item.displaySubtitle!,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: tokens(context).textMuted,
-                                fontSize: TVUIHelper.getFontSize(11),
-                                height: 1.1,
-                              ),
-                            )
-                          else if (widget.item.parentTitle != null)
-                            Text(
-                              widget.item.parentTitle!,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: tokens(context).textMuted,
-                                fontSize: TVUIHelper.getFontSize(11),
-                                height: 1.1,
-                              ),
-                            )
-                          else if (widget.item.year != null)
-                            Text(
-                              '${widget.item.year}',
-                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: tokens(context).textMuted,
-                                fontSize: TVUIHelper.getFontSize(11),
-                                height: 1.1,
-                              ),
-                            ),
-                        ],
+                      Text(
+                        widget.item.displayTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: TVUIHelper.getFontSize(12),
+                          height: 1.0,
+                        ),
                       ),
+                      if (widget.item.displaySubtitle != null)
+                        Text(
+                          widget.item.displaySubtitle!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: tokens(context).textMuted,
+                            fontSize: TVUIHelper.getFontSize(10),
+                            height: 1.0,
+                          ),
+                        )
+                      else if (widget.item.parentTitle != null)
+                        Text(
+                          widget.item.parentTitle!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: tokens(context).textMuted,
+                            fontSize: TVUIHelper.getFontSize(10),
+                            height: 1.0,
+                          ),
+                        )
+                      else if (widget.item.year != null)
+                        Text(
+                          '${widget.item.year}',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: tokens(context).textMuted,
+                            fontSize: TVUIHelper.getFontSize(10),
+                            height: 1.0,
+                          ),
+                        ),
                     ],
                   ),
                 ),
