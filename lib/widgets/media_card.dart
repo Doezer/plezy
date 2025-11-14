@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
 import '../models/plex_metadata.dart';
@@ -42,6 +43,8 @@ class MediaCard extends StatefulWidget {
 }
 
 class _MediaCardState extends State<MediaCard> {
+  VoidCallback? _showContextMenu;
+
   void _handleTap(BuildContext context) async {
     final client = context.client;
     if (client == null) return;
@@ -109,12 +112,14 @@ class _MediaCardState extends State<MediaCard> {
       onRemoveFromContinueWatching: widget.onRemoveFromContinueWatching,
       onTap: () => _handleTap(context),
       isInContinueWatching: widget.isInContinueWatching,
+      onMenuReady: (showMenu) => _showContextMenu = showMenu,
       child: viewMode == ViewMode.grid
           ? _MediaCardGrid(
               item: widget.item,
               width: widget.width,
               height: widget.height,
               onTap: () => _handleTap(context),
+              showContextMenu: () => _showContextMenu?.call(),
             )
           : _MediaCardList(
               item: widget.item,
@@ -131,12 +136,14 @@ class _MediaCardGrid extends StatefulWidget {
   final double? width;
   final double? height;
   final VoidCallback onTap;
+  final VoidCallback? showContextMenu;
 
   const _MediaCardGrid({
     required this.item,
     this.width,
     this.height,
     required this.onTap,
+    this.showContextMenu,
   });
 
   @override
@@ -146,6 +153,8 @@ class _MediaCardGrid extends StatefulWidget {
 class _MediaCardGridState extends State<_MediaCardGrid> {
   final FocusNode _focusNode = FocusNode();
   bool _isFocused = false;
+  Timer? _longPressTimer;
+  bool _isLongPress = false;
 
   @override
   void initState() {
@@ -155,6 +164,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
 
   @override
   void dispose() {
+    _longPressTimer?.cancel();
     _focusNode.removeListener(_onFocusChange);
     _focusNode.dispose();
     super.dispose();
@@ -179,18 +189,40 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
         child: Focus(
           focusNode: _focusNode,
           onKeyEvent: (node, event) {
-            // Handle Enter key on TV
-            if (isTV && event is KeyDownEvent) {
-              if (event.logicalKey == LogicalKeyboardKey.select ||
-                  event.logicalKey == LogicalKeyboardKey.enter) {
-                widget.onTap();
+            if (!isTV) return KeyEventResult.ignored;
+
+            final isOkButton =
+                event.logicalKey == LogicalKeyboardKey.select ||
+                event.logicalKey == LogicalKeyboardKey.enter;
+
+            if (isOkButton) {
+              if (event is KeyDownEvent) {
+                // Start timer for long press detection
+                _isLongPress = false;
+                _longPressTimer?.cancel();
+                _longPressTimer = Timer(const Duration(milliseconds: 500), () {
+                  _isLongPress = true;
+                  widget.showContextMenu?.call();
+                });
+                return KeyEventResult.handled;
+              } else if (event is KeyUpEvent) {
+                // Cancel timer and check if it was a short press
+                _longPressTimer?.cancel();
+                final wasLongPress = _isLongPress;
+                _isLongPress = false;
+                
+                // Only trigger tap if it wasn't a long press
+                if (!wasLongPress) {
+                  widget.onTap();
+                }
                 return KeyEventResult.handled;
               }
             }
+
             return KeyEventResult.ignored;
           },
           child: AnimatedScale(
-            scale: _isFocused && isTV ? 1.05 : 1.0,
+            scale: _isFocused && isTV ? 1.03 : 1.0,
             duration: const Duration(milliseconds: 150),
             curve: Curves.easeOut,
             child: AnimatedContainer(
@@ -221,9 +253,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                           child: _buildPosterWithOverlay(context),
                         )
                       else
-                        Flexible(
-                          child: _buildPosterWithOverlay(context),
-                        ),
+                        Flexible(child: _buildPosterWithOverlay(context)),
                       // Text content
                       Text(
                         widget.item.displayTitle,
@@ -240,31 +270,34 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                           widget.item.displaySubtitle!,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: tokens(context).textMuted,
-                            fontSize: TVUIHelper.getFontSize(10),
-                            height: 1.0,
-                          ),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: tokens(context).textMuted,
+                                fontSize: TVUIHelper.getFontSize(10),
+                                height: 1.0,
+                              ),
                         )
                       else if (widget.item.parentTitle != null)
                         Text(
                           widget.item.parentTitle!,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: tokens(context).textMuted,
-                            fontSize: TVUIHelper.getFontSize(10),
-                            height: 1.0,
-                          ),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: tokens(context).textMuted,
+                                fontSize: TVUIHelper.getFontSize(10),
+                                height: 1.0,
+                              ),
                         )
                       else if (widget.item.year != null)
                         Text(
                           '${widget.item.year}',
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: tokens(context).textMuted,
-                            fontSize: TVUIHelper.getFontSize(10),
-                            height: 1.0,
-                          ),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: tokens(context).textMuted,
+                                fontSize: TVUIHelper.getFontSize(10),
+                                height: 1.0,
+                              ),
                         ),
                     ],
                   ),
