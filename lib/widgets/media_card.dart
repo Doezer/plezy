@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
 import '../models/plex_metadata.dart';
@@ -153,8 +152,7 @@ class _MediaCardGrid extends StatefulWidget {
 class _MediaCardGridState extends State<_MediaCardGrid> {
   final FocusNode _focusNode = FocusNode();
   bool _isFocused = false;
-  Timer? _longPressTimer;
-  bool _isLongPress = false;
+  bool _isLongPressTriggered = false;
 
   @override
   void initState() {
@@ -164,7 +162,6 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
 
   @override
   void dispose() {
-    _longPressTimer?.cancel();
     _focusNode.removeListener(_onFocusChange);
     _focusNode.dispose();
     super.dispose();
@@ -197,41 +194,36 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
 
             if (isOkButton) {
               if (event is KeyDownEvent) {
-                // Start timer for long press detection
-                _isLongPress = false;
-                _longPressTimer?.cancel();
-                _longPressTimer = Timer(const Duration(milliseconds: 500), () {
-                  _isLongPress = true;
+                // Reset flag on initial key down
+                _isLongPressTriggered = false;
+                return KeyEventResult.handled;
+              } else if (event is KeyRepeatEvent) {
+                // Key is being held down - trigger long press action once
+                if (!_isLongPressTriggered) {
+                  _isLongPressTriggered = true;
                   widget.showContextMenu?.call();
-                });
+                }
                 return KeyEventResult.handled;
               } else if (event is KeyUpEvent) {
-                // Cancel timer and check if it was a short press
-                _longPressTimer?.cancel();
-                final wasLongPress = _isLongPress;
-                _isLongPress = false;
-
-                // Only trigger tap if it wasn't a long press
-                if (!wasLongPress) {
+                // Key released - if no long press was triggered, do short press
+                if (!_isLongPressTriggered) {
                   widget.onTap();
                 }
+                // Reset for next interaction
+                _isLongPressTriggered = false;
                 return KeyEventResult.handled;
               }
             }
 
             return KeyEventResult.ignored;
           },
-          child: AnimatedScale(
-            scale: _isFocused && isTV ? 1.02 : 1.0,
+          child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
-            curve: Curves.easeOut,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-                border: _isFocused && isTV
-                    ? Border.all(
-                        color: Theme.of(context).colorScheme.primary,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: _isFocused && isTV
+                  ? Border.all(
+                      color: Theme.of(context).colorScheme.primary,
                         width: 1,
                       )
                     : null,
@@ -306,7 +298,6 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
             ),
           ),
         ),
-      ),
     );
   }
 
