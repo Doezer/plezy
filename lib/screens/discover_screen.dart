@@ -214,12 +214,12 @@ class _DiscoverScreenState extends State<DiscoverScreen>
       appLogger.d(
         'Received ${onDeck.length} on deck items and ${allHubs.length} hubs',
       );
-      
+
       // On TV, prioritize specific hubs for better UX
-      final hubsToDisplay = PlatformDetector.isTVSync() 
-          ? _selectTVHubs(allHubs) 
+      final hubsToDisplay = PlatformDetector.isTVSync()
+          ? _selectTVHubs(allHubs)
           : allHubs;
-      
+
       setState(() {
         _onDeck = onDeck;
         _hubs = hubsToDisplay;
@@ -294,34 +294,36 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   }
 
   /// Select and prioritize hubs for TV display
-  /// Prioritizes: Recently Released Movies, Recently Added Movies, 
+  /// Prioritizes: Recently Released Movies, Recently Added Movies,
   /// Recently Released Shows, Recently Added Shows
   List<PlexHub> _selectTVHubs(List<PlexHub> allHubs) {
     final selectedHubs = <PlexHub>[];
-    
+
     // Helper function to check if hub matches criteria
-    bool _matchesHub(PlexHub h, String action, List<String> types) {
+    bool matchesHub(PlexHub h, String action, List<String> types) {
       final title = h.title.toLowerCase();
-      return title.contains(action) && types.any((type) => title.contains(type));
+      return title.contains(action) &&
+          types.any((type) => title.contains(type));
     }
-    
+
     // Priority checks for TV (in order of preference)
     final priorities = [
-      (PlexHub h) => _matchesHub(h, 'recently released', ['movie', 'film']),
-      (PlexHub h) => _matchesHub(h, 'recently added', ['movie', 'film']),
-      (PlexHub h) => _matchesHub(h, 'recently released', ['show', 'tv', 'series']),
-      (PlexHub h) => _matchesHub(h, 'recently added', ['show', 'tv', 'series']),
+      (PlexHub h) => matchesHub(h, 'recently released', ['movie', 'film']),
+      (PlexHub h) => matchesHub(h, 'recently added', ['movie', 'film']),
+      (PlexHub h) =>
+          matchesHub(h, 'recently released', ['show', 'tv', 'series']),
+      (PlexHub h) => matchesHub(h, 'recently added', ['show', 'tv', 'series']),
     ];
-    
+
     // Try to find hubs matching priorities
     for (final priorityCheck in priorities) {
       if (selectedHubs.length >= 4) break;
-      
+
       try {
         final hub = allHubs.firstWhere(priorityCheck);
-        
+
         // Only add if hub has items and wasn't already added
-        if (hub.items.isNotEmpty && 
+        if (hub.items.isNotEmpty &&
             !selectedHubs.any((h) => h.hubKey == hub.hubKey)) {
           selectedHubs.add(hub);
         }
@@ -329,18 +331,18 @@ class _DiscoverScreenState extends State<DiscoverScreen>
         // Hub not found, continue to next priority
       }
     }
-    
+
     // If we don't have 4 hubs, fill with other non-empty hubs
     if (selectedHubs.length < 4) {
       for (final hub in allHubs) {
         if (selectedHubs.length >= 4) break;
-        if (hub.items.isNotEmpty && 
+        if (hub.items.isNotEmpty &&
             !selectedHubs.any((h) => h.hubKey == hub.hubKey)) {
           selectedHubs.add(hub);
         }
       }
     }
-    
+
     return selectedHubs;
   }
 
@@ -664,7 +666,9 @@ class _DiscoverScreenState extends State<DiscoverScreen>
               Consumer<SettingsProvider>(
                 builder: (context, settingsProvider, child) {
                   final isTV = PlatformDetector.isTVSync();
-                  if (_onDeck.isNotEmpty && settingsProvider.showHeroSection && !isTV) {
+                  if (_onDeck.isNotEmpty &&
+                      settingsProvider.showHeroSection &&
+                      !isTV) {
                     return _buildHeroSection();
                   }
                   return const SliverToBoxAdapter(child: SizedBox.shrink());
@@ -768,7 +772,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
 
   Widget _buildHeroSection() {
     final isTV = PlatformDetector.isTVSync();
-    
+
     return SliverToBoxAdapter(
       child: SizedBox(
         height: 500,
@@ -964,28 +968,30 @@ class _DiscoverScreenState extends State<DiscoverScreen>
         : t.discover.tvShow;
 
     return Focus(
-      onKeyEvent: isTV ? (node, event) {
-        if (event is KeyDownEvent) {
-          if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-            if (_currentHeroIndex > 0) {
-              _heroController.previousPage(
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-              );
-              return KeyEventResult.handled;
+      onKeyEvent: isTV
+          ? (node, event) {
+              if (event is KeyDownEvent) {
+                if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+                  if (_currentHeroIndex > 0) {
+                    _heroController.previousPage(
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeInOut,
+                    );
+                    return KeyEventResult.handled;
+                  }
+                } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+                  if (_currentHeroIndex < _onDeck.length - 1) {
+                    _heroController.nextPage(
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeInOut,
+                    );
+                    return KeyEventResult.handled;
+                  }
+                }
+              }
+              return KeyEventResult.ignored;
             }
-          } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-            if (_currentHeroIndex < _onDeck.length - 1) {
-              _heroController.nextPage(
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-              );
-              return KeyEventResult.handled;
-            }
-          }
-        }
-        return KeyEventResult.ignored;
-      } : null,
+          : null,
       child: Semantics(
         label: "media-hero-${heroItem.ratingKey}",
         identifier: "media-hero-${heroItem.ratingKey}",
@@ -997,7 +1003,9 @@ class _DiscoverScreenState extends State<DiscoverScreen>
             final client = clientProvider.client;
             if (client == null) return;
 
-            appLogger.d('Navigating to VideoPlayerScreen for: ${heroItem.title}');
+            appLogger.d(
+              'Navigating to VideoPlayerScreen for: ${heroItem.title}',
+            );
             navigateToVideoPlayer(context, metadata: heroItem);
           },
           child: Container(
@@ -1013,154 +1021,122 @@ class _DiscoverScreenState extends State<DiscoverScreen>
               ],
             ),
             child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                // Background Image with fade/zoom animation and parallax
-                if (heroItem.art != null || heroItem.grandparentArt != null)
-                  AnimatedBuilder(
-                    animation: _scrollController,
-                    builder: (context, child) {
-                      final scrollOffset = _scrollController.hasClients
-                          ? _scrollController.offset
-                          : 0.0;
-                      return Transform.translate(
-                        offset: Offset(0, scrollOffset * 0.3),
-                        child: child,
-                      );
-                    },
-                    child: TweenAnimationBuilder<double>(
-                      tween: Tween(begin: 0.0, end: 1.0),
-                      duration: const Duration(milliseconds: 800),
-                      curve: Curves.easeOut,
-                      builder: (context, value, child) {
-                        return Transform.scale(
-                          scale: 1.0 + (0.1 * (1 - value)),
-                          child: Opacity(opacity: value, child: child),
+              borderRadius: BorderRadius.circular(16),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // Background Image with fade/zoom animation and parallax
+                  if (heroItem.art != null || heroItem.grandparentArt != null)
+                    AnimatedBuilder(
+                      animation: _scrollController,
+                      builder: (context, child) {
+                        final scrollOffset = _scrollController.hasClients
+                            ? _scrollController.offset
+                            : 0.0;
+                        return Transform.translate(
+                          offset: Offset(0, scrollOffset * 0.3),
+                          child: child,
                         );
                       },
-                      child: Consumer<PlexClientProvider>(
-                        builder: (context, clientProvider, child) {
-                          final client = clientProvider.client;
-                          if (client == null) {
-                            return Container(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.surfaceContainerHighest,
-                            );
-                          }
-                          return CachedNetworkImage(
-                            imageUrl: client.getThumbnailUrl(
-                              heroItem.art ?? heroItem.grandparentArt,
-                            ),
-                            fit: BoxFit.cover,
-                            placeholder: (context, url) => Container(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.surfaceContainerHighest,
-                            ),
-                            errorWidget: (context, url, error) => Container(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.surfaceContainerHighest,
-                            ),
+                      child: TweenAnimationBuilder<double>(
+                        tween: Tween(begin: 0.0, end: 1.0),
+                        duration: const Duration(milliseconds: 800),
+                        curve: Curves.easeOut,
+                        builder: (context, value, child) {
+                          return Transform.scale(
+                            scale: 1.0 + (0.1 * (1 - value)),
+                            child: Opacity(opacity: value, child: child),
                           );
                         },
+                        child: Consumer<PlexClientProvider>(
+                          builder: (context, clientProvider, child) {
+                            final client = clientProvider.client;
+                            if (client == null) {
+                              return Container(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.surfaceContainerHighest,
+                              );
+                            }
+                            return CachedNetworkImage(
+                              imageUrl: client.getThumbnailUrl(
+                                heroItem.art ?? heroItem.grandparentArt,
+                              ),
+                              fit: BoxFit.cover,
+                              placeholder: (context, url) => Container(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.surfaceContainerHighest,
+                              ),
+                              errorWidget: (context, url, error) => Container(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.surfaceContainerHighest,
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    )
+                  else
+                    Container(
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.surfaceContainerHighest,
+                    ),
+
+                  // Gradient Overlay
+                  Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.transparent,
+                          Colors.black.withValues(alpha: 0.7),
+                          Colors.black.withValues(alpha: 0.9),
+                        ],
+                        stops: const [0.0, 0.5, 1.0],
                       ),
                     ),
-                  )
-                else
-                  Container(
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.surfaceContainerHighest,
                   ),
 
-                // Gradient Overlay
-                Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.transparent,
-                        Colors.black.withValues(alpha: 0.7),
-                        Colors.black.withValues(alpha: 0.9),
-                      ],
-                      stops: const [0.0, 0.5, 1.0],
-                    ),
-                  ),
-                ),
-
-                // Content with responsive alignment
-                Positioned(
-                  bottom: isLargeScreen ? 80 : 50,
-                  left: 0,
-                  right: isLargeScreen ? 200 : 0,
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: isLargeScreen ? 40 : 16,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: isLargeScreen
-                          ? CrossAxisAlignment.start
-                          : CrossAxisAlignment.center,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Show logo or name/title
-                        if (heroItem.clearLogo != null)
-                          SizedBox(
-                            height: 120,
-                            width: 400,
-                            child: Consumer<PlexClientProvider>(
-                              builder: (context, clientProvider, child) {
-                                final client = clientProvider.client;
-                                if (client == null) {
-                                  return Container();
-                                }
-                                return CachedNetworkImage(
-                                  imageUrl: client.getThumbnailUrl(
-                                    heroItem.clearLogo,
-                                  ),
-                                  filterQuality: FilterQuality.medium,
-                                  fit: BoxFit.contain,
-                                  alignment: isLargeScreen
-                                      ? Alignment.bottomLeft
-                                      : Alignment.bottomCenter,
-                                  placeholder: (context, url) => Align(
-                                    alignment: isLargeScreen
-                                        ? Alignment.centerLeft
-                                        : Alignment.center,
-                                    child: Text(
-                                      showName,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .displaySmall
-                                          ?.copyWith(
-                                            color: Colors.white.withValues(
-                                              alpha: 0.3,
-                                            ),
-                                            fontWeight: FontWeight.bold,
-                                            shadows: [
-                                              Shadow(
-                                                color: Colors.black.withValues(
-                                                  alpha: 0.5,
-                                                ),
-                                                blurRadius: 8,
-                                              ),
-                                            ],
-                                          ),
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      textAlign: isLargeScreen
-                                          ? TextAlign.left
-                                          : TextAlign.center,
+                  // Content with responsive alignment
+                  Positioned(
+                    bottom: isLargeScreen ? 80 : 50,
+                    left: 0,
+                    right: isLargeScreen ? 200 : 0,
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: isLargeScreen ? 40 : 16,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: isLargeScreen
+                            ? CrossAxisAlignment.start
+                            : CrossAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Show logo or name/title
+                          if (heroItem.clearLogo != null)
+                            SizedBox(
+                              height: 120,
+                              width: 400,
+                              child: Consumer<PlexClientProvider>(
+                                builder: (context, clientProvider, child) {
+                                  final client = clientProvider.client;
+                                  if (client == null) {
+                                    return Container();
+                                  }
+                                  return CachedNetworkImage(
+                                    imageUrl: client.getThumbnailUrl(
+                                      heroItem.clearLogo,
                                     ),
-                                  ),
-                                  errorWidget: (context, url, error) {
-                                    // Fallback to text if logo fails to load
-                                    return Align(
+                                    filterQuality: FilterQuality.medium,
+                                    fit: BoxFit.contain,
+                                    alignment: isLargeScreen
+                                        ? Alignment.bottomLeft
+                                        : Alignment.bottomCenter,
+                                    placeholder: (context, url) => Align(
                                       alignment: isLargeScreen
                                           ? Alignment.centerLeft
                                           : Alignment.center,
@@ -1170,7 +1146,9 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                                             .textTheme
                                             .displaySmall
                                             ?.copyWith(
-                                              color: Colors.white,
+                                              color: Colors.white.withValues(
+                                                alpha: 0.3,
+                                              ),
                                               fontWeight: FontWeight.bold,
                                               shadows: [
                                                 Shadow(
@@ -1186,118 +1164,147 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                                             ? TextAlign.left
                                             : TextAlign.center,
                                       ),
-                                    );
-                                  },
-                                );
-                              },
-                            ),
-                          )
-                        else
-                          Text(
-                            showName,
-                            style: Theme.of(context).textTheme.displaySmall
-                                ?.copyWith(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  shadows: [
-                                    Shadow(
-                                      color: Colors.black.withValues(
-                                        alpha: 0.5,
-                                      ),
-                                      blurRadius: 8,
                                     ),
-                                  ],
-                                ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: isLargeScreen
-                                ? TextAlign.left
-                                : TextAlign.center,
-                          ),
-
-                        // Metadata as dot-separated text with content type
-                        if (heroItem.year != null ||
-                            heroItem.contentRating != null ||
-                            heroItem.rating != null) ...[
-                          const SizedBox(height: 16),
-                          Text(
-                            [
-                              contentTypeLabel,
-                              if (heroItem.rating != null)
-                                '★ ${heroItem.rating!.toStringAsFixed(1)}',
-                              if (heroItem.contentRating != null)
-                                formatContentRating(heroItem.contentRating!),
-                              if (heroItem.year != null)
-                                heroItem.year.toString(),
-                            ].join(' • '),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                            ),
-                            textAlign: isLargeScreen
-                                ? TextAlign.left
-                                : TextAlign.center,
-                          ),
-                        ],
-
-                        // On small screens: show button before summary
-                        if (!isLargeScreen) ...[
-                          const SizedBox(height: 20),
-                          _buildSmartPlayButton(heroItem),
-                        ],
-
-                        // Summary with episode info (Apple TV style)
-                        if (heroItem.summary != null) ...[
-                          const SizedBox(height: 12),
-                          RichText(
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: isLargeScreen
-                                ? TextAlign.left
-                                : TextAlign.center,
-                            text: TextSpan(
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 14,
-                                height: 1.4,
+                                    errorWidget: (context, url, error) {
+                                      // Fallback to text if logo fails to load
+                                      return Align(
+                                        alignment: isLargeScreen
+                                            ? Alignment.centerLeft
+                                            : Alignment.center,
+                                        child: Text(
+                                          showName,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .displaySmall
+                                              ?.copyWith(
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.bold,
+                                                shadows: [
+                                                  Shadow(
+                                                    color: Colors.black
+                                                        .withValues(alpha: 0.5),
+                                                    blurRadius: 8,
+                                                  ),
+                                                ],
+                                              ),
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          textAlign: isLargeScreen
+                                              ? TextAlign.left
+                                              : TextAlign.center,
+                                        ),
+                                      );
+                                    },
+                                  );
+                                },
                               ),
-                              children: [
-                                if (isEpisode &&
-                                    heroItem.parentIndex != null &&
-                                    heroItem.index != null)
-                                  TextSpan(
-                                    text:
-                                        'S${heroItem.parentIndex}, E${heroItem.index}: ',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.white,
-                                    ),
+                            )
+                          else
+                            Text(
+                              showName,
+                              style: Theme.of(context).textTheme.displaySmall
+                                  ?.copyWith(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    shadows: [
+                                      Shadow(
+                                        color: Colors.black.withValues(
+                                          alpha: 0.5,
+                                        ),
+                                        blurRadius: 8,
+                                      ),
+                                    ],
                                   ),
-                                TextSpan(
-                                  text: heroItem.summary?.isNotEmpty == true
-                                      ? heroItem.summary!
-                                      : 'No description available',
-                                ),
-                              ],
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: isLargeScreen
+                                  ? TextAlign.left
+                                  : TextAlign.center,
                             ),
-                          ),
-                        ],
 
-                        // On large screens: show button after summary
-                        if (isLargeScreen) ...[
-                          const SizedBox(height: 20),
-                          _buildSmartPlayButton(heroItem),
+                          // Metadata as dot-separated text with content type
+                          if (heroItem.year != null ||
+                              heroItem.contentRating != null ||
+                              heroItem.rating != null) ...[
+                            const SizedBox(height: 16),
+                            Text(
+                              [
+                                contentTypeLabel,
+                                if (heroItem.rating != null)
+                                  '★ ${heroItem.rating!.toStringAsFixed(1)}',
+                                if (heroItem.contentRating != null)
+                                  formatContentRating(heroItem.contentRating!),
+                                if (heroItem.year != null)
+                                  heroItem.year.toString(),
+                              ].join(' • '),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              textAlign: isLargeScreen
+                                  ? TextAlign.left
+                                  : TextAlign.center,
+                            ),
+                          ],
+
+                          // On small screens: show button before summary
+                          if (!isLargeScreen) ...[
+                            const SizedBox(height: 20),
+                            _buildSmartPlayButton(heroItem),
+                          ],
+
+                          // Summary with episode info (Apple TV style)
+                          if (heroItem.summary != null) ...[
+                            const SizedBox(height: 12),
+                            RichText(
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: isLargeScreen
+                                  ? TextAlign.left
+                                  : TextAlign.center,
+                              text: TextSpan(
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 14,
+                                  height: 1.4,
+                                ),
+                                children: [
+                                  if (isEpisode &&
+                                      heroItem.parentIndex != null &&
+                                      heroItem.index != null)
+                                    TextSpan(
+                                      text:
+                                          'S${heroItem.parentIndex}, E${heroItem.index}: ',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  TextSpan(
+                                    text: heroItem.summary?.isNotEmpty == true
+                                        ? heroItem.summary!
+                                        : 'No description available',
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+
+                          // On large screens: show button after summary
+                          if (isLargeScreen) ...[
+                            const SizedBox(height: 20),
+                            _buildSmartPlayButton(heroItem),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
-      ),
       ),
     );
   }
