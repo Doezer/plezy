@@ -1148,6 +1148,30 @@ class _LibrariesScreenState extends State<LibrariesScreen>
     final screenWidth = MediaQuery.of(context).size.width;
     final padding = 16.0; // 8px left + 8px right
     final availableWidth = screenWidth - padding;
+    final isTV = PlatformDetector.isTVSync();
+
+    // On TV, use larger card sizes for better visibility with D-pad navigation
+    if (isTV) {
+      double divisor;
+      double maxItemWidth;
+
+      switch (density) {
+        case LibraryDensity.comfortable:
+          divisor = 4.0;  // Larger cards
+          maxItemWidth = 350;
+          break;
+        case LibraryDensity.normal:
+          divisor = 5.0;  // Medium cards
+          maxItemWidth = 280;
+          break;
+        case LibraryDensity.compact:
+          divisor = 6.5;  // Smaller but still readable
+          maxItemWidth = 220;
+          break;
+      }
+
+      return (availableWidth / divisor).clamp(0, maxItemWidth);
+    }
 
     if (screenWidth >= 900) {
       // Wide screens (desktop/large tablet landscape): Responsive division
