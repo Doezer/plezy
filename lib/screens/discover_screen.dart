@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
 import '../client/plex_client.dart';
@@ -24,6 +25,7 @@ import '../utils/app_logger.dart';
 import '../utils/provider_extensions.dart';
 import '../utils/video_player_navigation.dart';
 import '../utils/content_rating_formatter.dart';
+import '../utils/platform_detector.dart';
 import 'auth_screen.dart';
 
 class DiscoverScreen extends StatefulWidget {
@@ -212,9 +214,15 @@ class _DiscoverScreenState extends State<DiscoverScreen>
       appLogger.d(
         'Received ${onDeck.length} on deck items and ${allHubs.length} hubs',
       );
+      
+      // On TV, prioritize specific hubs for better UX
+      final hubsToDisplay = PlatformDetector.isTVSync() 
+          ? _selectTVHubs(allHubs) 
+          : allHubs;
+      
       setState(() {
         _onDeck = onDeck;
-        _hubs = allHubs;
+        _hubs = hubsToDisplay;
         _isLoading = false;
 
         // Reset hero index to avoid sync issues
@@ -283,6 +291,57 @@ class _DiscoverScreenState extends State<DiscoverScreen>
     appLogger.d('DiscoverScreen.fullRefresh() called - reloading all content');
     // Reload all content including On Deck and content hubs
     _loadContent();
+  }
+
+  /// Select and prioritize hubs for TV display
+  /// Prioritizes: Recently Released Movies, Recently Added Movies, 
+  /// Recently Released Shows, Recently Added Shows
+  List<PlexHub> _selectTVHubs(List<PlexHub> allHubs) {
+    final selectedHubs = <PlexHub>[];
+    
+    // Helper function to check if hub matches criteria
+    bool _matchesHub(PlexHub h, String action, List<String> types) {
+      final title = h.title.toLowerCase();
+      return title.contains(action) && types.any((type) => title.contains(type));
+    }
+    
+    // Priority checks for TV (in order of preference)
+    final priorities = [
+      (PlexHub h) => _matchesHub(h, 'recently released', ['movie', 'film']),
+      (PlexHub h) => _matchesHub(h, 'recently added', ['movie', 'film']),
+      (PlexHub h) => _matchesHub(h, 'recently released', ['show', 'tv', 'series']),
+      (PlexHub h) => _matchesHub(h, 'recently added', ['show', 'tv', 'series']),
+    ];
+    
+    // Try to find hubs matching priorities
+    for (final priorityCheck in priorities) {
+      if (selectedHubs.length >= 4) break;
+      
+      try {
+        final hub = allHubs.firstWhere(priorityCheck);
+        
+        // Only add if hub has items and wasn't already added
+        if (hub.items.isNotEmpty && 
+            !selectedHubs.any((h) => h.hubKey == hub.hubKey)) {
+          selectedHubs.add(hub);
+        }
+      } catch (e) {
+        // Hub not found, continue to next priority
+      }
+    }
+    
+    // If we don't have 4 hubs, fill with other non-empty hubs
+    if (selectedHubs.length < 4) {
+      for (final hub in allHubs) {
+        if (selectedHubs.length >= 4) break;
+        if (hub.items.isNotEmpty && 
+            !selectedHubs.any((h) => h.hubKey == hub.hubKey)) {
+          selectedHubs.add(hub);
+        }
+      }
+    }
+    
+    return selectedHubs;
   }
 
   /// Get icon for hub based on its title
@@ -637,6 +696,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
               ],
 
               // Recommendation Hubs (Trending, Top in Genre, etc.)
+              // On TV, hubs are pre-filtered by _selectTVHubs to show relevant content
               for (final hub in _hubs) ...[
                 SliverToBoxAdapter(
                   child: Padding(
@@ -707,6 +767,8 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   }
 
   Widget _buildHeroSection() {
+    final isTV = PlatformDetector.isTVSync();
+    
     return SliverToBoxAdapter(
       child: SizedBox(
         height: 500,
