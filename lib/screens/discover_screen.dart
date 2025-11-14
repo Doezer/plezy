@@ -598,10 +598,11 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                 ),
               ),
             if (!_isLoading && _errorMessage == null) ...[
-              // Hero Section (Continue Watching)
+              // Hero Section (Continue Watching) - Hidden on TV for now
               Consumer<SettingsProvider>(
                 builder: (context, settingsProvider, child) {
-                  if (_onDeck.isNotEmpty && settingsProvider.showHeroSection) {
+                  final isTV = PlatformDetector.isTVSync();
+                  if (_onDeck.isNotEmpty && settingsProvider.showHeroSection && !isTV) {
                     return _buildHeroSection();
                   }
                   return const SliverToBoxAdapter(child: SizedBox.shrink());
