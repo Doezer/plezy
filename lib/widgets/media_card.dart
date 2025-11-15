@@ -239,7 +239,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                   ? [
                       BoxShadow(
                         color: Theme.of(context).brightness == Brightness.dark
-                            ? Colors.white.withOpacity(0.3)
+                            ? Colors.white.withValues(alpha: 0.3)
                             : Theme.of(context).colorScheme.primary,
                         spreadRadius: 2,
                         blurRadius: 0,
