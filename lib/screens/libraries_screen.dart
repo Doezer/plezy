@@ -22,6 +22,7 @@ import '../mixins/item_updatable.dart';
 import '../theme/theme_helper.dart';
 import '../i18n/strings.g.dart';
 import '../utils/platform_detector.dart';
+import 'playlists_screen.dart';
 
 class LibrariesScreen extends StatefulWidget {
   final String? initialLibraryType; // 'movie' or 'show'
@@ -1138,6 +1139,16 @@ class _LibrariesScreenState extends State<LibrariesScreen>
             ],
           ],
         ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => const PlaylistsScreen()),
+          );
+        },
+        tooltip: t.playlists.title,
+        child: const Icon(Icons.playlist_play),
       ),
     );
   }
