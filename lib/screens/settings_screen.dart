@@ -9,6 +9,7 @@ import '../providers/theme_provider.dart';
 import '../services/keyboard_shortcuts_service.dart';
 import '../services/settings_service.dart' as settings;
 import '../services/update_service.dart';
+import '../utils/platform_detector.dart';
 import '../widgets/desktop_app_bar.dart';
 import '../widgets/hotkey_recorder_widget.dart';
 import 'about_screen.dart';
@@ -33,6 +34,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _seekTimeSmall = 10;
   int _seekTimeLarge = 30;
   int _sleepTimerDuration = 30;
+  bool _rememberTrackSelections = true;
 
   // Update checking state
   bool _isCheckingForUpdate = false;
@@ -55,6 +57,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _seekTimeSmall = _settingsService.getSeekTimeSmall();
       _seekTimeLarge = _settingsService.getSeekTimeLarge();
       _sleepTimerDuration = _settingsService.getSleepTimerDuration();
+      _rememberTrackSelections = _settingsService.getRememberTrackSelections();
       _isLoading = false;
     });
   }
@@ -79,8 +82,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 24),
                 _buildShufflePlaySection(),
                 const SizedBox(height: 24),
-                _buildKeyboardShortcutsSection(),
-                const SizedBox(height: 24),
+                // Hide keyboard shortcuts on TV
+                if (!PlatformDetector.isTVSync()) ...[
+                  _buildKeyboardShortcutsSection(),
+                  const SizedBox(height: 24),
+                ],
                 _buildAdvancedSection(),
                 const SizedBox(height: 24),
                 if (UpdateService.isUpdateCheckEnabled) ...[
@@ -263,6 +269,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _showSleepTimerDurationDialog(),
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.bookmark),
+            title: Text(t.settings.rememberTrackSelections),
+            subtitle: Text(t.settings.rememberTrackSelectionsDescription),
+            value: _rememberTrackSelections,
+            onChanged: (value) async {
+              setState(() {
+                _rememberTrackSelections = value;
+              });
+              await _settingsService.setRememberTrackSelections(value);
+            },
           ),
         ],
       ),
@@ -871,6 +889,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return 'Italiano';
       case AppLocale.nl:
         return 'Nederlands';
+      case AppLocale.de:
+        return 'Deutsch';
+      case AppLocale.zh:
+        return '中文';
     }
   }
 
