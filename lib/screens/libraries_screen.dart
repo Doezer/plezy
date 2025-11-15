@@ -35,6 +35,14 @@ class LibrariesScreen extends StatefulWidget {
 
 class _LibrariesScreenState extends State<LibrariesScreen>
     with Refreshable, ItemUpdatable {
+  // TV grid sizing constants
+  static const double _tvComfortableDivisor = 4.0;
+  static const double _tvComfortableMaxWidth = 350.0;
+  static const double _tvNormalDivisor = 5.0;
+  static const double _tvNormalMaxWidth = 280.0;
+  static const double _tvCompactDivisor = 6.5;
+  static const double _tvCompactMaxWidth = 220.0;
+  
   @override
   PlexClient get client => context.clientSafe;
 
@@ -1181,16 +1189,16 @@ class _LibrariesScreenState extends State<LibrariesScreen>
 
       switch (density) {
         case LibraryDensity.comfortable:
-          divisor = 4.0; // Larger cards
-          maxItemWidth = 350;
+          divisor = _tvComfortableDivisor;
+          maxItemWidth = _tvComfortableMaxWidth;
           break;
         case LibraryDensity.normal:
-          divisor = 5.0; // Medium cards
-          maxItemWidth = 280;
+          divisor = _tvNormalDivisor;
+          maxItemWidth = _tvNormalMaxWidth;
           break;
         case LibraryDensity.compact:
-          divisor = 6.5; // Smaller but still readable
-          maxItemWidth = 220;
+          divisor = _tvCompactDivisor;
+          maxItemWidth = _tvCompactMaxWidth;
           break;
       }
 

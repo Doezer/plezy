@@ -4,6 +4,7 @@ import '../i18n/strings.g.dart';
 import '../utils/app_logger.dart';
 import '../utils/provider_extensions.dart';
 import '../utils/platform_detector.dart';
+import '../utils/tv_ui_helper.dart';
 import '../main.dart';
 import '../mixins/refreshable.dart';
 import 'discover_screen.dart';
@@ -163,7 +164,7 @@ class _MainScreenState extends State<MainScreen> with RouteAware {
                 }
               },
               labelType: NavigationRailLabelType.all,
-              minWidth: 80,
+              minWidth: TVUIHelper.tvNavigationRailMinWidth,
               destinations: [
                 NavigationRailDestination(
                   icon: const Icon(Icons.home_outlined),

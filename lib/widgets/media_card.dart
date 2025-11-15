@@ -264,7 +264,7 @@ class _MediaCardGridState extends State<_MediaCardGrid> {
                         child: _buildPosterWithOverlay(context),
                       )
                     else
-                      Flexible(child: _buildPosterWithOverlay(context)),
+                      Expanded(child: _buildPosterWithOverlay(context)),
                     // Text content
                     Text(
                       widget.item.displayTitle,
