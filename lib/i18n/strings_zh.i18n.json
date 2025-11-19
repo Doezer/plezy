@@ -199,7 +199,10 @@
     "fillScreen": "填充屏幕",
     "stretch": "拉伸",
     "lockRotation": "锁定旋转",
-    "unlockRotation": "解锁旋转"
+    "unlockRotation": "解锁旋转",
+    "skipIntro": "跳过片头",
+    "skipCredits": "跳过片尾",
+    "nextEpisode": "下一集"
   },
   "userStatus": {
     "admin": "管理员",

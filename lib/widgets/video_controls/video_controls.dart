@@ -948,8 +948,8 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
     // Show "Next Episode" for credits when next episode is available
     final bool showNextEpisode = isCredits && hasNextEpisode;
     final String buttonText = showNextEpisode
-        ? 'Next Episode'
-        : (isCredits ? 'Skip Credits' : 'Skip Intro');
+        ? t.videoControls.nextEpisode
+        : (isCredits ? t.videoControls.skipCredits : t.videoControls.skipIntro);
     final IconData buttonIcon = showNextEpisode
         ? Icons.skip_next
         : Icons.fast_forward;

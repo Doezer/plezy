@@ -199,7 +199,10 @@
     "fillScreen": "Vul scherm",
     "stretch": "Uitrekken",
     "lockRotation": "Vergrendel rotatie",
-    "unlockRotation": "Ontgrendel rotatie"
+    "unlockRotation": "Ontgrendel rotatie",
+    "skipIntro": "Intro overslaan",
+    "skipCredits": "Aftiteling overslaan",
+    "nextEpisode": "Volgende aflevering"
   },
   "userStatus": {
     "admin": "Beheerder",

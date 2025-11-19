@@ -199,7 +199,10 @@
     "fillScreen": "Bild füllen",
     "stretch": "Strecken",
     "lockRotation": "Rotation sperren",
-    "unlockRotation": "Rotation entsperren"
+    "unlockRotation": "Rotation entsperren",
+    "skipIntro": "Intro überspringen",
+    "skipCredits": "Abspann überspringen",
+    "nextEpisode": "Nächste Episode"
   },
   "userStatus": {
     "admin": "Eigentümer",

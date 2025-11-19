@@ -199,7 +199,10 @@
     "fillScreen": "Riempi schermo",
     "stretch": "Allunga",
     "lockRotation": "Blocca rotazione",
-    "unlockRotation": "Sblocca rotazione"
+    "unlockRotation": "Sblocca rotazione",
+    "skipIntro": "Salta introduzione",
+    "skipCredits": "Salta titoli di coda",
+    "nextEpisode": "Prossimo episodio"
   },
   "userStatus": {
     "admin": "Admin",
