@@ -215,7 +215,6 @@
     "unlockRotation": "Lås upp rotation",
     "skipIntro": "Hoppa över intro",
     "skipCredits": "Hoppa över eftertexterna",
-    "nextEpisode": "Nästa avsnitt",
     "sleepTimer": "Sovtimer",
     "timerActive": "Timer aktiv",
     "playbackWillPauseIn": "Uppspelningen pausas om ${duration}",
