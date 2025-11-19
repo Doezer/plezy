@@ -110,8 +110,6 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
   PlexMarker? _currentMarker;
   List<PlexMarker> _markers = [];
   bool _markersLoaded = false;
-  // Playing state subscription for auto-hiding controls
-  StreamSubscription<bool>? _playingSubscription;
 
   @override
   void initState() {
@@ -123,7 +121,6 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
     _startHideTimer();
     _initKeyboardService();
     _listenToPosition();
-    _listenToPlayingState();
     // Add lifecycle observer to reload settings when app resumes
     WidgetsBinding.instance.addObserver(this);
     // Add window listener for tracking fullscreen state (for button icon)
@@ -156,15 +153,6 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
             _currentMarker = foundMarker;
           });
         }
-      }
-    });
-  }
-
-  void _listenToPlayingState() {
-    _playingSubscription = widget.player.stream.playing.listen((isPlaying) {
-      // When playback starts, start the auto-hide timer
-      if (isPlaying) {
-        _startHideTimer();
       }
     });
   }
@@ -231,7 +219,6 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
     _hideTimer?.cancel();
     _feedbackTimer?.cancel();
     _seekThrottleTimer?.cancel();
-    _playingSubscription?.cancel();
     _focusNode.dispose();
     // Remove lifecycle observer
     WidgetsBinding.instance.removeObserver(this);
@@ -477,6 +464,8 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
                       // Sheet is now closed, reload immediately
                       if (mounted) {
                         await _loadSeekTimes();
+                        // Restart hide timer after sheet is closed
+                        _startHideTimer();
                       }
                     },
                   );
@@ -485,40 +474,64 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
               if (_hasMultipleAudioTracks(tracks))
                 VideoControlButton(
                   icon: Icons.audiotrack,
-                  onPressed: () => AudioTrackSheet.show(
-                    context,
-                    widget.player,
-                    onTrackChanged: widget.onAudioTrackChanged,
-                  ),
+                  onPressed: () async {
+                    await AudioTrackSheet.show(
+                      context,
+                      widget.player,
+                      onTrackChanged: widget.onAudioTrackChanged,
+                    );
+                    // Restart hide timer after sheet is closed
+                    if (mounted) {
+                      _startHideTimer();
+                    }
+                  },
                 ),
               if (_hasSubtitles(tracks))
                 VideoControlButton(
                   icon: Icons.subtitles,
-                  onPressed: () => SubtitleTrackSheet.show(
-                    context,
-                    widget.player,
-                    onTrackChanged: widget.onSubtitleTrackChanged,
-                  ),
+                  onPressed: () async {
+                    await SubtitleTrackSheet.show(
+                      context,
+                      widget.player,
+                      onTrackChanged: widget.onSubtitleTrackChanged,
+                    );
+                    // Restart hide timer after sheet is closed
+                    if (mounted) {
+                      _startHideTimer();
+                    }
+                  },
                 ),
               if (_chapters.isNotEmpty)
                 VideoControlButton(
                   icon: Icons.video_library,
-                  onPressed: () => ChapterSheet.show(
-                    context,
-                    widget.player,
-                    _chapters,
-                    _chaptersLoaded,
-                  ),
+                  onPressed: () async {
+                    await ChapterSheet.show(
+                      context,
+                      widget.player,
+                      _chapters,
+                      _chaptersLoaded,
+                    );
+                    // Restart hide timer after sheet is closed
+                    if (mounted) {
+                      _startHideTimer();
+                    }
+                  },
                 ),
               if (widget.availableVersions.length > 1)
                 VideoControlButton(
                   icon: Icons.video_file,
-                  onPressed: () => VersionSheet.show(
-                    context,
-                    widget.availableVersions,
-                    widget.selectedMediaIndex,
-                    _switchMediaVersion,
-                  ),
+                  onPressed: () async {
+                    await VersionSheet.show(
+                      context,
+                      widget.availableVersions,
+                      widget.selectedMediaIndex,
+                      _switchMediaVersion,
+                    );
+                    // Restart hide timer after sheet is closed
+                    if (mounted) {
+                      _startHideTimer();
+                    }
+                  },
                 ),
               // BoxFit mode cycle button
               if (widget.onCycleBoxFitMode != null)
@@ -791,17 +804,18 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
             ? SystemMouseCursors.basic
             : SystemMouseCursors.none,
         onHover: (_) {
-          // Show controls when mouse moves
+          // Show controls when mouse moves and restart hide timer
           if (!_showControls) {
             setState(() {
               _showControls = true;
             });
-            _startHideTimer();
             // On macOS, show traffic lights when controls appear
             if (Platform.isMacOS) {
               _updateTrafficLightVisibility();
             }
           }
+          // Always restart the hide timer on mouse movement when playing
+          _startHideTimer();
         },
         child: Stack(
           children: [
