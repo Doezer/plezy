@@ -110,6 +110,8 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
   PlexMarker? _currentMarker;
   List<PlexMarker> _markers = [];
   bool _markersLoaded = false;
+  // Playing state subscription for auto-hiding controls
+  StreamSubscription<bool>? _playingSubscription;
 
   @override
   void initState() {
@@ -121,6 +123,7 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
     _startHideTimer();
     _initKeyboardService();
     _listenToPosition();
+    _listenToPlayingState();
     // Add lifecycle observer to reload settings when app resumes
     WidgetsBinding.instance.addObserver(this);
     // Add window listener for tracking fullscreen state (for button icon)
@@ -153,6 +156,15 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
             _currentMarker = foundMarker;
           });
         }
+      }
+    });
+  }
+
+  void _listenToPlayingState() {
+    _playingSubscription = widget.player.stream.playing.listen((isPlaying) {
+      // When playback starts, start the auto-hide timer
+      if (isPlaying) {
+        _startHideTimer();
       }
     });
   }
@@ -219,6 +231,7 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
     _hideTimer?.cancel();
     _feedbackTimer?.cancel();
     _seekThrottleTimer?.cancel();
+    _playingSubscription?.cancel();
     _focusNode.dispose();
     // Remove lifecycle observer
     WidgetsBinding.instance.removeObserver(this);
