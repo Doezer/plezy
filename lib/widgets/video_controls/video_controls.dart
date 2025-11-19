@@ -293,6 +293,15 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
     }
   }
 
+  /// Helper method to show a sheet and restart the hide timer after it closes
+  Future<void> _showSheetAndRestartTimer(Future<void> Function() showSheet) async {
+    await showSheet();
+    // Restart hide timer after sheet is closed
+    if (mounted) {
+      _startHideTimer();
+    }
+  }
+
   void _toggleControls() {
     setState(() {
       _showControls = !_showControls;
@@ -454,7 +463,7 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
                   return VideoControlButton(
                     icon: Icons.tune,
                     isActive: isActive,
-                    onPressed: () async {
+                    onPressed: () => _showSheetAndRestartTimer(() async {
                       await VideoSettingsSheet.show(
                         context,
                         widget.player,
@@ -464,74 +473,48 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
                       // Sheet is now closed, reload immediately
                       if (mounted) {
                         await _loadSeekTimes();
-                        // Restart hide timer after sheet is closed
-                        _startHideTimer();
                       }
-                    },
+                    }),
                   );
                 },
               ),
               if (_hasMultipleAudioTracks(tracks))
                 VideoControlButton(
                   icon: Icons.audiotrack,
-                  onPressed: () async {
-                    await AudioTrackSheet.show(
-                      context,
-                      widget.player,
-                      onTrackChanged: widget.onAudioTrackChanged,
-                    );
-                    // Restart hide timer after sheet is closed
-                    if (mounted) {
-                      _startHideTimer();
-                    }
-                  },
+                  onPressed: () => _showSheetAndRestartTimer(() => AudioTrackSheet.show(
+                    context,
+                    widget.player,
+                    onTrackChanged: widget.onAudioTrackChanged,
+                  )),
                 ),
               if (_hasSubtitles(tracks))
                 VideoControlButton(
                   icon: Icons.subtitles,
-                  onPressed: () async {
-                    await SubtitleTrackSheet.show(
-                      context,
-                      widget.player,
-                      onTrackChanged: widget.onSubtitleTrackChanged,
-                    );
-                    // Restart hide timer after sheet is closed
-                    if (mounted) {
-                      _startHideTimer();
-                    }
-                  },
+                  onPressed: () => _showSheetAndRestartTimer(() => SubtitleTrackSheet.show(
+                    context,
+                    widget.player,
+                    onTrackChanged: widget.onSubtitleTrackChanged,
+                  )),
                 ),
               if (_chapters.isNotEmpty)
                 VideoControlButton(
                   icon: Icons.video_library,
-                  onPressed: () async {
-                    await ChapterSheet.show(
-                      context,
-                      widget.player,
-                      _chapters,
-                      _chaptersLoaded,
-                    );
-                    // Restart hide timer after sheet is closed
-                    if (mounted) {
-                      _startHideTimer();
-                    }
-                  },
+                  onPressed: () => _showSheetAndRestartTimer(() => ChapterSheet.show(
+                    context,
+                    widget.player,
+                    _chapters,
+                    _chaptersLoaded,
+                  )),
                 ),
               if (widget.availableVersions.length > 1)
                 VideoControlButton(
                   icon: Icons.video_file,
-                  onPressed: () async {
-                    await VersionSheet.show(
-                      context,
-                      widget.availableVersions,
-                      widget.selectedMediaIndex,
-                      _switchMediaVersion,
-                    );
-                    // Restart hide timer after sheet is closed
-                    if (mounted) {
-                      _startHideTimer();
-                    }
-                  },
+                  onPressed: () => _showSheetAndRestartTimer(() => VersionSheet.show(
+                    context,
+                    widget.availableVersions,
+                    widget.selectedMediaIndex,
+                    _switchMediaVersion,
+                  )),
                 ),
               // BoxFit mode cycle button
               if (widget.onCycleBoxFitMode != null)
