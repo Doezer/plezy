@@ -1097,7 +1097,7 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
     if (plexSelectedTrack == null) return null;
 
     // Try to match by multiple attributes for better accuracy
-    // Priority: language + title, then language + codec, then language only
+    // Priority: language + title, then language only
     AudioTrack? bestMatch;
     
     // Try matching by language and title
@@ -1286,7 +1286,8 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
           appLogger.d('Priority 4: Checking Plex selected track, default, or first available');
           
           // First try Plex's selected track
-          trackToSelect = _findPlexSelectedAudioTrack(realAudioTracks);
+          final plexSelected = _findPlexSelectedAudioTrack(realAudioTracks);
+          trackToSelect = plexSelected;
           
           // If no Plex selected track, try media_kit default
           if (trackToSelect == null) {
@@ -1296,7 +1297,7 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
             );
           }
           
-          final isPlexSelected = _findPlexSelectedAudioTrack(realAudioTracks) == trackToSelect;
+          final isPlexSelected = plexSelected != null && plexSelected == trackToSelect;
           final isDefault = trackToSelect.isDefault == true;
           appLogger.d(
             '  Selected ${isPlexSelected ? "Plex selected" : isDefault ? "default" : "first"} track: ${trackToSelect.title ?? "Track ${trackToSelect.id}"} (${trackToSelect.language ?? "unknown"})',
@@ -1400,7 +1401,8 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
         appLogger.d('Priority 4: Checking for Plex selected or default subtitle track');
         
         // First try Plex's selected track
-        subtitleToSelect = _findPlexSelectedSubtitleTrack(realSubtitleTracks);
+        final plexSelected = _findPlexSelectedSubtitleTrack(realSubtitleTracks);
+        subtitleToSelect = plexSelected;
         
         // If no Plex selected track, try media_kit default
         if (subtitleToSelect == null) {
@@ -1413,7 +1415,7 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
         }
         
         if (subtitleToSelect != null) {
-          final isPlexSelected = _findPlexSelectedSubtitleTrack(realSubtitleTracks) == subtitleToSelect;
+          final isPlexSelected = plexSelected != null && plexSelected == subtitleToSelect;
           final isDefault = subtitleToSelect.isDefault == true;
           appLogger.d(
             '  Found ${isPlexSelected ? "Plex selected" : isDefault ? "default" : ""} track: ${subtitleToSelect.title ?? "Track ${subtitleToSelect.id}"} (${subtitleToSelect.language ?? "unknown"})',
