@@ -79,7 +79,10 @@ class TrackSelectionService {
   ///
   /// Priority order:
   /// 1. Per-media preferred subtitle language (from metadata.subtitleLanguage)
-  /// 2. Profile-wide subtitle preferences (based on auto-select mode)
+  /// 2. Profile-wide subtitle preferences (based on auto-select mode):
+  ///    - Mode 0: Manually selected - uses Plex's selected track
+  ///    - Mode 1: Shown with foreign audio
+  ///    - Mode 2: Always enabled
   /// 3. Disabled (null)
   ///
   /// Returns the selected subtitle track, or null if subtitles should be disabled
@@ -115,8 +118,18 @@ class TrackSelectionService {
     }
 
     // Priority 2: Use profile-wide subtitle preferences
-    // Mode 0: Manually selected - return null to disable subtitles
+    // Mode 0: Manually selected - use Plex's selected track
     if (profile.autoSelectSubtitle == 0) {
+      // Find the track marked as selected by Plex
+      final plexSelectedTrack = tracks.firstWhere(
+        (track) => track.selected,
+        orElse: () => tracks.first,
+      );
+      
+      // If we found a selected track, use it; otherwise return null to disable
+      if (plexSelectedTrack.selected) {
+        return plexSelectedTrack;
+      }
       return null;
     }
 

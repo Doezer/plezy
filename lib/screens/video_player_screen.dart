@@ -8,6 +8,7 @@ import 'package:os_media_controls/os_media_controls.dart';
 import 'package:provider/provider.dart';
 
 import '../client/plex_client.dart';
+import '../models/plex_media_info.dart';
 import '../models/plex_media_version.dart';
 import '../models/plex_metadata.dart';
 import '../models/plex_user_profile.dart';
@@ -76,6 +77,9 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
   Size? _playerSize;
   Size? _videoSize;
   Timer? _resizeDebounceTimer;
+
+  // Plex track information with selected state
+  PlexMediaInfo? _plexMediaInfo;
 
   @override
   void initState() {
@@ -402,10 +406,11 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
         final videoUrl = playbackData.videoUrl!;
         final mediaInfo = playbackData.mediaInfo;
 
-        // Update available versions from the playback data
+        // Update available versions and media info from the playback data
         if (mounted) {
           setState(() {
             _availableVersions = playbackData.availableVersions;
+            _plexMediaInfo = mediaInfo;
           });
           // Update video filter once dimensions are available
           _updateVideoFilter();
@@ -1154,6 +1159,59 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
     return variations.contains(trackBase);
   }
 
+  /// Finds the media_kit AudioTrack that corresponds to Plex's selected audio track
+  AudioTrack? _findPlexSelectedAudioTrack(List<AudioTrack> tracks) {
+    if (_plexMediaInfo == null) return null;
+
+    // Find the Plex track marked as selected
+    final plexSelectedTrack = _plexMediaInfo!.audioTracks
+        .where((t) => t.selected)
+        .firstOrNull;
+    
+    if (plexSelectedTrack == null) return null;
+
+    // Try to match by language to find the corresponding media_kit track
+    // We use language matching since track IDs may differ between Plex and media_kit
+    for (var track in tracks) {
+      if (_languageMatches(track.language, plexSelectedTrack.languageCode)) {
+        appLogger.d(
+          'Found Plex selected audio track: ${track.title ?? "Track ${track.id}"} (${track.language ?? "unknown"})',
+        );
+        return track;
+      }
+    }
+
+    return null;
+  }
+
+  /// Finds the media_kit SubtitleTrack that corresponds to Plex's selected subtitle track
+  SubtitleTrack? _findPlexSelectedSubtitleTrack(List<SubtitleTrack> tracks) {
+    if (_plexMediaInfo == null) return null;
+
+    // Find the Plex track marked as selected
+    final plexSelectedTrack = _plexMediaInfo!.subtitleTracks
+        .where((t) => t.selected)
+        .firstOrNull;
+    
+    if (plexSelectedTrack == null) {
+      appLogger.d('No Plex selected subtitle track found');
+      return null;
+    }
+
+    // Try to match by language to find the corresponding media_kit track
+    // We use language matching since track IDs may differ between Plex and media_kit
+    for (var track in tracks) {
+      if (_languageMatches(track.language, plexSelectedTrack.languageCode)) {
+        appLogger.d(
+          'Found Plex selected subtitle track: ${track.title ?? "Track ${track.id}"} (${track.language ?? "unknown"})',
+        );
+        return track;
+      }
+    }
+
+    return null;
+  }
+
   void _waitForTracksAndApply() async {
     // Helper function to process tracks
     Future<void> processTracks(Tracks tracks) async {
@@ -1244,16 +1302,25 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
           appLogger.d('Priority 3: No user profile available');
         }
 
-        // Priority 4: If no match, use default or first track
+        // Priority 4: If no match, use Plex's selected track or default or first track
         if (trackToSelect == null) {
-          appLogger.d('Priority 4: Using default or first available track');
-          trackToSelect = realAudioTracks.firstWhere(
-            (t) => t.isDefault == true,
-            orElse: () => realAudioTracks.first,
-          );
+          appLogger.d('Priority 4: Checking Plex selected track, default, or first available');
+          
+          // First try Plex's selected track
+          trackToSelect = _findPlexSelectedAudioTrack(realAudioTracks);
+          
+          // If no Plex selected track, try media_kit default
+          if (trackToSelect == null) {
+            trackToSelect = realAudioTracks.firstWhere(
+              (t) => t.isDefault == true,
+              orElse: () => realAudioTracks.first,
+            );
+          }
+          
+          final isPlexSelected = _findPlexSelectedAudioTrack(realAudioTracks) == trackToSelect;
           final isDefault = trackToSelect.isDefault == true;
           appLogger.d(
-            '  Selected ${isDefault ? "default" : "first"} track: ${trackToSelect.title ?? "Track ${trackToSelect.id}"} (${trackToSelect.language ?? "unknown"})',
+            '  Selected ${isPlexSelected ? "Plex selected" : isDefault ? "default" : "first"} track: ${trackToSelect.title ?? "Track ${trackToSelect.id}"} (${trackToSelect.language ?? "unknown"})',
           );
         }
 
@@ -1349,19 +1416,31 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
         appLogger.d('Priority 3: No user profile available');
       }
 
-      // Priority 4: If no profile match, check for default subtitle
+      // Priority 4: If no profile match, check for Plex's selected subtitle or default
       if (subtitleToSelect == null && realSubtitleTracks.isNotEmpty) {
-        appLogger.d('Priority 4: Checking for default subtitle track');
-        final defaultTrackIndex = realSubtitleTracks.indexWhere(
-          (t) => t.isDefault == true,
-        );
-        if (defaultTrackIndex != -1) {
-          subtitleToSelect = realSubtitleTracks[defaultTrackIndex];
+        appLogger.d('Priority 4: Checking for Plex selected or default subtitle track');
+        
+        // First try Plex's selected track
+        subtitleToSelect = _findPlexSelectedSubtitleTrack(realSubtitleTracks);
+        
+        // If no Plex selected track, try media_kit default
+        if (subtitleToSelect == null) {
+          final defaultTrackIndex = realSubtitleTracks.indexWhere(
+            (t) => t.isDefault == true,
+          );
+          if (defaultTrackIndex != -1) {
+            subtitleToSelect = realSubtitleTracks[defaultTrackIndex];
+          }
+        }
+        
+        if (subtitleToSelect != null) {
+          final isPlexSelected = _findPlexSelectedSubtitleTrack(realSubtitleTracks) == subtitleToSelect;
+          final isDefault = subtitleToSelect.isDefault == true;
           appLogger.d(
-            '  Found default track: ${subtitleToSelect.title ?? "Track ${subtitleToSelect.id}"} (${subtitleToSelect.language ?? "unknown"})',
+            '  Found ${isPlexSelected ? "Plex selected" : isDefault ? "default" : ""} track: ${subtitleToSelect.title ?? "Track ${subtitleToSelect.id}"} (${subtitleToSelect.language ?? "unknown"})',
           );
         } else {
-          appLogger.d('  No default subtitle track found');
+          appLogger.d('  No Plex selected or default subtitle track found');
         }
       }
 
