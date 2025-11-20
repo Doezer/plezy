@@ -37,7 +37,10 @@
     "refresh": "Aggiorna",
     "yes": "Sì",
     "no": "No",
-    "server": "Server"
+    "server": "Server",
+    "delete": "Elimina",
+    "shuffle": "Casuale",
+    "addTo": "Aggiungi a..."
   },
   "screens": {
     "licenses": "Licenze",
@@ -45,7 +48,7 @@
     "switchProfile": "Cambia profilo",
     "subtitleStyling": "Stile sottotitoli",
     "search": "Cerca",
-    "logs": "Logs"
+    "logs": "Registro"
   },
   "update": {
     "available": "Aggiornamento disponibile",
@@ -181,6 +184,16 @@
     "shufflePlay": "Riproduzione casuale",
     "fileInfo": "Info sul file"
   },
+  "accessibility": {
+    "mediaCardMovie": "${title}, film",
+    "mediaCardShow": "${title}, serie TV",
+    "mediaCardEpisode": "${title}, ${episodeInfo}",
+    "mediaCardSeason": "${title}, ${seasonInfo}",
+    "mediaCardWatched": "visto",
+    "mediaCardPartiallyWatched": "${percent} percento visto",
+    "mediaCardUnwatched": "non visto",
+    "tapToPlay": "Tocca per riprodurre"
+  },
   "tooltips": {
     "shufflePlay": "Riproduzione casuale",
     "markAsWatched": "Segna come visto",
@@ -194,12 +207,39 @@
     "minusTime": "-${amount}${unit}",
     "playsLater": "${label} riprodotto dopo",
     "playsEarlier": "${label} riprodotto prima",
-    "noOffset": "No offset",
+    "noOffset": "Nessun offset",
     "letterbox": "Letterbox",
     "fillScreen": "Riempi schermo",
     "stretch": "Allunga",
     "lockRotation": "Blocca rotazione",
-    "unlockRotation": "Sblocca rotazione"
+    "unlockRotation": "Sblocca rotazione",
+    "sleepTimer": "Timer di spegnimento",
+    "timerActive": "Timer attivo",
+    "playbackWillPauseIn": "La riproduzione si interromperà tra ${duration}",
+    "sleepTimerCompleted": "Timer di spegnimento completato - riproduzione in pausa",
+    "playButton": "Riproduci",
+    "pauseButton": "Pausa",
+    "seekBackwardButton": "Riavvolgi di ${seconds} secondi",
+    "seekForwardButton": "Avanza di ${seconds} secondi",
+    "previousButton": "Episodio precedente",
+    "nextButton": "Episodio successivo",
+    "previousChapterButton": "Capitolo precedente",
+    "nextChapterButton": "Capitolo successivo",
+    "volumeButton": "Volume",
+    "muteButton": "Silenzia",
+    "unmuteButton": "Riattiva audio",
+    "settingsButton": "Impostazioni video",
+    "audioTrackButton": "Tracce audio",
+    "subtitlesButton": "Sottotitoli",
+    "chaptersButton": "Capitoli",
+    "versionsButton": "Versioni video",
+    "aspectRatioButton": "Proporzioni",
+    "fullscreenButton": "Attiva schermo intero",
+    "exitFullscreenButton": "Esci da schermo intero",
+    "rotationLockButton": "Blocco rotazione",
+    "timelineSlider": "Timeline video",
+    "volumeSlider": "Livello volume",
+    "backButton": "Indietro"
   },
   "userStatus": {
     "admin": "Admin",
@@ -233,7 +273,11 @@
     "noEpisodesFoundGeneral": "Nessun episodio trovato",
     "noResultsFound": "Nessun risultato",
     "sleepTimerSet": "Imposta timer spegnimento per ${label}",
-    "failedToSwitchProfile": "Impossibile passare a ${displayName}"
+    "failedToSwitchProfile": "Impossibile passare a ${displayName}",
+    "noItemsAvailable": "Nessun elemento disponibile",
+    "failedToCreatePlayQueue": "Impossibile creare la coda di riproduzione",
+    "failedToCreatePlayQueueNoItems": "Impossibile creare la coda di riproduzione - nessun elemento",
+    "failedPlayback": "Impossibile ${action}: ${error}"
   },
   "profile": {
     "noUsersAvailable": "Nessun utente disponibile"
@@ -254,7 +298,7 @@
     "playNow": "Riproduci ora"
   },
   "discover": {
-    "title": "Discover",
+    "title": "Esplora",
     "switchProfile": "Cambia profilo",
     "switchServer": "Cambia server",
     "logout": "Disconnetti",
@@ -268,7 +312,7 @@
     "resumeEpisode": "Riprendi S${season}, E${episode}",
     "pause": "Pausa",
     "overview": "Panoramica",
-    "cast": "Cast",
+    "cast": "Attori",
     "seasons": "Stagioni",
     "studio": "Studio",
     "rating": "Classificazione",
@@ -323,7 +367,28 @@
     "confirmActionMessage": "Sei sicuro di voler eseguire questa azione?",
     "showLibrary": "Mostra libreria",
     "hideLibrary": "Nascondi libreria",
-    "libraryOptions": "Opzioni libreria"
+    "libraryOptions": "Opzioni libreria",
+    "content": "contenuto della libreria",
+    "selectLibrary": "Seleziona libreria",
+    "filtersWithCount": "Filtri (${count})",
+    "noRecommendations": "Nessun consiglio disponibile",
+    "noCollections": "Nessuna raccolta in questa libreria",
+    "noFoldersFound": "Nessuna cartella trovata",
+    "folders": "cartelle",
+    "tabs": {
+      "recommended": "Consigliati",
+      "browse": "Esplora",
+      "collections": "Raccolte",
+      "playlists": "Playlist"
+    },
+    "groupings": {
+      "all": "Tutti",
+      "movies": "Film",
+      "shows": "Serie TV",
+      "seasons": "Stagioni",
+      "episodes": "Episodi",
+      "folders": "Cartelle"
+    }
   },
   "about": {
     "title": "Informazioni",
@@ -354,7 +419,7 @@
     "noItemsFound": "Nessun elemento trovato"
   },
   "logs": {
-    "title": "Log",
+    "title": "Registro",
     "clearLogs": "Cancella log",
     "copyLogs": "Copia log",
     "exportLogs": "Esporta log",
@@ -408,6 +473,33 @@
     "errorLoading": "Errore durante il caricamento delle playlist",
     "errorAdding": "Errore durante l'aggiunta alla playlist",
     "errorReordering": "Errore durante il riordino dell'elemento della playlist",
-    "errorRemoving": "Errore durante la rimozione dalla playlist"
+    "errorRemoving": "Errore durante la rimozione dalla playlist",
+    "playlist": "Playlist"
+  },
+  "collections": {
+    "title": "Raccolte",
+    "collection": "Raccolta",
+    "empty": "La raccolta è vuota",
+    "noItems": "Nessun elemento in questa raccolta",
+    "unknownLibrarySection": "Impossibile eliminare: sezione libreria sconosciuta",
+    "deleteCollection": "Elimina raccolta",
+    "deleteConfirm": "Sei sicuro di voler eliminare \"${title}\"? Questa azione non può essere annullata.",
+    "deleted": "Raccolta eliminata",
+    "deleteFailed": "Impossibile eliminare la raccolta",
+    "deleteFailedWithError": "Impossibile eliminare la raccolta: ${error}",
+    "failedToLoadItems": "Impossibile caricare gli elementi della raccolta: ${error}",
+    "addTo": "Aggiungi alla raccolta",
+    "selectCollection": "Seleziona raccolta",
+    "createNewCollection": "Crea nuova raccolta",
+    "collectionName": "Nome raccolta",
+    "enterCollectionName": "Inserisci nome raccolta",
+    "addedToCollection": "Aggiunto alla raccolta",
+    "errorAddingToCollection": "Errore nell'aggiunta alla raccolta",
+    "created": "Raccolta creata",
+    "removeFromCollection": "Rimuovi dalla raccolta",
+    "removeFromCollectionConfirm": "Rimuovere \"${title}\" da questa raccolta?",
+    "removedFromCollection": "Rimosso dalla raccolta",
+    "removeFromCollectionFailed": "Impossibile rimuovere dalla raccolta",
+    "removeFromCollectionError": "Errore durante la rimozione dalla raccolta: ${error}"
   }
 }
