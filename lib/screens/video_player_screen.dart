@@ -1170,18 +1170,38 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
     
     if (plexSelectedTrack == null) return null;
 
-    // Try to match by language to find the corresponding media_kit track
-    // We use language matching since track IDs may differ between Plex and media_kit
-    for (var track in tracks) {
-      if (_languageMatches(track.language, plexSelectedTrack.languageCode)) {
+    // Try to match by multiple attributes for better accuracy
+    // Priority: language + title, then language + codec, then language only
+    AudioTrack? bestMatch;
+    
+    // Try matching by language and title
+    if (plexSelectedTrack.displayTitle != null || plexSelectedTrack.title != null) {
+      final plexTitle = plexSelectedTrack.displayTitle ?? plexSelectedTrack.title;
+      bestMatch = tracks.where((track) {
+        return _languageMatches(track.language, plexSelectedTrack.languageCode) &&
+               (track.title == plexTitle);
+      }).firstOrNull;
+      
+      if (bestMatch != null) {
         appLogger.d(
-          'Found Plex selected audio track: ${track.title ?? "Track ${track.id}"} (${track.language ?? "unknown"})',
+          'Found Plex selected audio track by language+title: ${bestMatch.title ?? "Track ${bestMatch.id}"} (${bestMatch.language ?? "unknown"})',
         );
-        return track;
+        return bestMatch;
       }
     }
+    
+    // Try matching by language only (for cases where titles differ or are missing)
+    bestMatch = tracks.where((track) {
+      return _languageMatches(track.language, plexSelectedTrack.languageCode);
+    }).firstOrNull;
+    
+    if (bestMatch != null) {
+      appLogger.d(
+        'Found Plex selected audio track by language: ${bestMatch.title ?? "Track ${bestMatch.id}"} (${bestMatch.language ?? "unknown"})',
+      );
+    }
 
-    return null;
+    return bestMatch;
   }
 
   /// Finds the media_kit SubtitleTrack that corresponds to Plex's selected subtitle track
@@ -1198,18 +1218,51 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
       return null;
     }
 
-    // Try to match by language to find the corresponding media_kit track
-    // We use language matching since track IDs may differ between Plex and media_kit
-    for (var track in tracks) {
-      if (_languageMatches(track.language, plexSelectedTrack.languageCode)) {
+    // Try to match by multiple attributes for better accuracy
+    // Priority: language + title, then language + forced, then language only
+    SubtitleTrack? bestMatch;
+    
+    // Try matching by language and title
+    if (plexSelectedTrack.displayTitle != null || plexSelectedTrack.title != null) {
+      final plexTitle = plexSelectedTrack.displayTitle ?? plexSelectedTrack.title;
+      bestMatch = tracks.where((track) {
+        return _languageMatches(track.language, plexSelectedTrack.languageCode) &&
+               (track.title == plexTitle);
+      }).firstOrNull;
+      
+      if (bestMatch != null) {
         appLogger.d(
-          'Found Plex selected subtitle track: ${track.title ?? "Track ${track.id}"} (${track.language ?? "unknown"})',
+          'Found Plex selected subtitle track by language+title: ${bestMatch.title ?? "Track ${bestMatch.id}"} (${bestMatch.language ?? "unknown"})',
         );
-        return track;
+        return bestMatch;
       }
     }
+    
+    // Try matching by language and forced flag
+    bestMatch = tracks.where((track) {
+      return _languageMatches(track.language, plexSelectedTrack.languageCode) &&
+             _isForced(track) == plexSelectedTrack.forced;
+    }).firstOrNull;
+    
+    if (bestMatch != null) {
+      appLogger.d(
+        'Found Plex selected subtitle track by language+forced: ${bestMatch.title ?? "Track ${bestMatch.id}"} (${bestMatch.language ?? "unknown"})',
+      );
+      return bestMatch;
+    }
+    
+    // Try matching by language only (for cases where attributes differ or are missing)
+    bestMatch = tracks.where((track) {
+      return _languageMatches(track.language, plexSelectedTrack.languageCode);
+    }).firstOrNull;
+    
+    if (bestMatch != null) {
+      appLogger.d(
+        'Found Plex selected subtitle track by language: ${bestMatch.title ?? "Track ${bestMatch.id}"} (${bestMatch.language ?? "unknown"})',
+      );
+    }
 
-    return null;
+    return bestMatch;
   }
 
   void _waitForTracksAndApply() async {
