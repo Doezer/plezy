@@ -121,16 +121,12 @@ class TrackSelectionService {
     // Mode 0: Manually selected - use Plex's selected track
     if (profile.autoSelectSubtitle == 0) {
       // Find the track marked as selected by Plex
-      final plexSelectedTrack = tracks.firstWhere(
-        (track) => track.selected,
-        orElse: () => tracks.first,
-      );
+      final plexSelectedTrack = tracks
+          .where((track) => track.selected)
+          .firstOrNull;
       
-      // If we found a selected track, use it; otherwise return null to disable
-      if (plexSelectedTrack.selected) {
-        return plexSelectedTrack;
-      }
-      return null;
+      // Return the selected track if found, otherwise null to disable
+      return plexSelectedTrack;
     }
 
     // Mode 1: Shown with foreign audio
