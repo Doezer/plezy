@@ -484,43 +484,51 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
                 VideoControlButton(
                   icon: Icons.audiotrack,
                   semanticLabel: t.videoControls.audioTrackButton,
-                  onPressed: () => _showSheetAndRestartTimer(() => AudioTrackSheet.show(
-                    context,
-                    widget.player,
-                    onTrackChanged: widget.onAudioTrackChanged,
-                  )),
+                  onPressed: () => _showSheetAndRestartTimer(() async {
+                    AudioTrackSheet.show(
+                      context,
+                      widget.player,
+                      onTrackChanged: widget.onAudioTrackChanged,
+                    );
+                  }),
                 ),
               if (_hasSubtitles(tracks))
                 VideoControlButton(
                   icon: Icons.subtitles,
                   semanticLabel: t.videoControls.subtitlesButton,
-                  onPressed: () => _showSheetAndRestartTimer(() => SubtitleTrackSheet.show(
-                    context,
-                    widget.player,
-                    onTrackChanged: widget.onSubtitleTrackChanged,
-                  )),
+                  onPressed: () => _showSheetAndRestartTimer(() async {
+                    SubtitleTrackSheet.show(
+                      context,
+                      widget.player,
+                      onTrackChanged: widget.onSubtitleTrackChanged,
+                    );
+                  }),
                 ),
               if (_chapters.isNotEmpty)
                 VideoControlButton(
                   icon: Icons.video_library,
                   semanticLabel: t.videoControls.chaptersButton,
-                  onPressed: () => _showSheetAndRestartTimer(() => ChapterSheet.show(
-                    context,
-                    widget.player,
-                    _chapters,
-                    _chaptersLoaded,
-                  )),
+                  onPressed: () => _showSheetAndRestartTimer(() async {
+                    ChapterSheet.show(
+                      context,
+                      widget.player,
+                      _chapters,
+                      _chaptersLoaded,
+                    );
+                  }),
                 ),
               if (widget.availableVersions.length > 1)
                 VideoControlButton(
                   icon: Icons.video_file,
                   semanticLabel: t.videoControls.versionsButton,
-                  onPressed: () => _showSheetAndRestartTimer(() => VersionSheet.show(
-                    context,
-                    widget.availableVersions,
-                    widget.selectedMediaIndex,
-                    _switchMediaVersion,
-                  )),
+                  onPressed: () => _showSheetAndRestartTimer(() async {
+                    VersionSheet.show(
+                      context,
+                      widget.availableVersions,
+                      widget.selectedMediaIndex,
+                      _switchMediaVersion,
+                    );
+                  }),
                 ),
               // BoxFit mode cycle button
               if (widget.onCycleBoxFitMode != null)
