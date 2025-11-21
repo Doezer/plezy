@@ -1200,7 +1200,7 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
           widget.metadata.grandparentRatingKey != null &&
           widget.metadata.subtitleLanguage == null) {
         try {
-          final client = context.plexClient.client;
+          final client = context.client;
           if (client != null) {
             appLogger.d(
               'Loading series subtitle preferences from ratingKey: ${widget.metadata.grandparentRatingKey}',
@@ -1324,7 +1324,7 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
             );
           }
           
-          final isPlexSelected = plexSelected != null && plexSelected == trackToSelect;
+          final isPlexSelected = plexSelected != null;
           final isDefault = trackToSelect.isDefault == true;
           appLogger.d(
             '  Selected ${isPlexSelected ? "Plex selected" : isDefault ? "default" : "first"} track: ${trackToSelect.title ?? "Track ${trackToSelect.id}"} (${trackToSelect.language ?? "unknown"})',
@@ -1442,7 +1442,7 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
         }
         
         if (subtitleToSelect != null) {
-          final isPlexSelected = plexSelected != null && plexSelected == subtitleToSelect;
+          final isPlexSelected = plexSelected != null;
           final isDefault = subtitleToSelect.isDefault == true;
           appLogger.d(
             '  Found ${isPlexSelected ? "Plex selected" : isDefault ? "default" : ""} track: ${subtitleToSelect.title ?? "Track ${subtitleToSelect.id}"} (${subtitleToSelect.language ?? "unknown"})',
