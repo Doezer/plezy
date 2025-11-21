@@ -710,37 +710,50 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
 
     // Stop progress tracking
     _progressTimer?.cancel();
+    _progressTimer = null;
 
     // Cancel debounce timer
     _resizeDebounceTimer?.cancel();
+    _resizeDebounceTimer = null;
 
     // Cancel stream subscriptions
     _playingSubscription?.cancel();
+    _playingSubscription = null;
     _completedSubscription?.cancel();
+    _completedSubscription = null;
     _logSubscription?.cancel();
+    _logSubscription = null;
     _errorSubscription?.cancel();
+    _errorSubscription = null;
     _positionSubscription?.cancel();
+    _positionSubscription = null;
     _mediaControlSubscription?.cancel();
+    _mediaControlSubscription = null;
     _bufferingSubscription?.cancel();
+    _bufferingSubscription = null;
 
-    // Clear OS media controls completely
-    OsMediaControls.clear();
-
-    // Send final stopped state
+    // Send final stopped state (async, don't wait)
     _sendProgress('stopped');
 
-    // Clear video filter and reset subtitle margins before disposing player
-    try {
-      if (player != null) {
-        final nativePlayer = player!.platform as dynamic;
-        nativePlayer.setProperty('vf', '');
-        nativePlayer.setProperty('sub-margin-x', '0');
-        nativePlayer.setProperty('sub-margin-y', '0');
-        nativePlayer.setProperty('sub-scale', '1.0');
+    // Dispose player first
+    final tempPlayer = player;
+    player = null;
+    controller = null;
+
+    // Clear OS media controls and dispose player asynchronously to avoid blocking
+    Future.microtask(() async {
+      try {
+        await OsMediaControls.clear();
+      } catch (e) {
+        // Ignore errors during cleanup
       }
-    } catch (e) {
-      // Ignore errors during cleanup
-    }
+
+      try {
+        tempPlayer?.dispose();
+      } catch (e) {
+        // Ignore errors during cleanup
+      }
+    });
 
     // Restore system UI and orientation preferences (skip if navigating to another video)
     if (!_isReplacingWithVideo) {
@@ -768,7 +781,6 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
       }
     }
 
-    player?.dispose();
     super.dispose();
   }
 
@@ -1686,8 +1698,9 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
       ]);
     }
 
-    // Set initial metadata
-    await _updateMediaMetadata();
+    // Set initial metadata asynchronously without blocking
+    // This prevents freezing when artwork takes time to load
+    _updateMediaMetadata();
   }
 
   Future<void> _updateMediaMetadata() async {
@@ -1695,6 +1708,46 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
       appLogger.w('Cannot update media metadata: widget not mounted');
       return;
     }
+
+    final metadata = widget.metadata;
+    
+    // Build title/artist based on content type
+    String title = metadata.title;
+    String? artist;
+    String? album;
+
+    if (metadata.type.toLowerCase() == 'episode') {
+      title = metadata.title;
+      artist = metadata.grandparentTitle; // Show name
+      if (metadata.parentIndex != null) {
+        album = 'Season ${metadata.parentIndex}';
+      }
+    }
+
+    // Set metadata immediately without artwork to avoid blocking
+    await OsMediaControls.setMetadata(
+      MediaMetadata(
+        title: title,
+        artist: artist,
+        album: album,
+        duration: metadata.duration != null
+            ? Duration(milliseconds: metadata.duration!)
+            : null,
+        artworkUrl: null, // Set artwork separately later
+      ),
+    );
+
+    // Set initial playback state
+    _updateMediaControlsPlaybackState();
+
+    // Load and set artwork asynchronously in the background
+    _loadAndSetArtwork();
+  }
+
+  /// Loads artwork URL and updates media controls metadata
+  /// This runs asynchronously to avoid blocking the UI
+  Future<void> _loadAndSetArtwork() async {
+    if (!mounted) return;
 
     final metadata = widget.metadata;
     final clientProvider = context.plexClient;
@@ -1723,33 +1776,32 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
       }
     }
 
-    // Build title/artist based on content type
-    String title = metadata.title;
-    String? artist;
-    String? album;
+    // If we have artwork, update metadata with it
+    if (artworkUrl != null && mounted) {
+      String title = metadata.title;
+      String? artist;
+      String? album;
 
-    if (metadata.type.toLowerCase() == 'episode') {
-      title = metadata.title;
-      artist = metadata.grandparentTitle; // Show name
-      if (metadata.parentIndex != null) {
-        album = 'Season ${metadata.parentIndex}';
+      if (metadata.type.toLowerCase() == 'episode') {
+        title = metadata.title;
+        artist = metadata.grandparentTitle;
+        if (metadata.parentIndex != null) {
+          album = 'Season ${metadata.parentIndex}';
+        }
       }
+
+      await OsMediaControls.setMetadata(
+        MediaMetadata(
+          title: title,
+          artist: artist,
+          album: album,
+          duration: metadata.duration != null
+              ? Duration(milliseconds: metadata.duration!)
+              : null,
+          artworkUrl: artworkUrl,
+        ),
+      );
     }
-
-    await OsMediaControls.setMetadata(
-      MediaMetadata(
-        title: title,
-        artist: artist,
-        album: album,
-        duration: metadata.duration != null
-            ? Duration(milliseconds: metadata.duration!)
-            : null,
-        artworkUrl: artworkUrl,
-      ),
-    );
-
-    // Set initial playback state
-    _updateMediaControlsPlaybackState();
   }
 
   void _updateMediaControlsPlaybackState() {
