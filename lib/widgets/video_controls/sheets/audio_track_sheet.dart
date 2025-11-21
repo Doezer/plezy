@@ -10,12 +10,12 @@ class AudioTrackSheet extends StatelessWidget {
 
   const AudioTrackSheet({super.key, required this.player, this.onTrackChanged});
 
-  static void show(
+  static Future<void> show(
     BuildContext context,
     Player player, {
     Function(AudioTrack)? onTrackChanged,
   }) {
-    BaseVideoControlSheet.showSheet(
+    return BaseVideoControlSheet.showSheet(
       context: context,
       builder: (context) =>
           AudioTrackSheet(player: player, onTrackChanged: onTrackChanged),

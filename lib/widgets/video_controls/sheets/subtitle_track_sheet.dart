@@ -14,12 +14,12 @@ class SubtitleTrackSheet extends StatelessWidget {
     this.onTrackChanged,
   });
 
-  static void show(
+  static Future<void> show(
     BuildContext context,
     Player player, {
     Function(SubtitleTrack)? onTrackChanged,
   }) {
-    BaseVideoControlSheet.showSheet(
+    return BaseVideoControlSheet.showSheet(
       context: context,
       builder: (context) =>
           SubtitleTrackSheet(player: player, onTrackChanged: onTrackChanged),

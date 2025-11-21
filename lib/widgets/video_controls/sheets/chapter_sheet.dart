@@ -19,13 +19,13 @@ class ChapterSheet extends StatelessWidget {
     required this.chaptersLoaded,
   });
 
-  static void show(
+  static Future<void> show(
     BuildContext context,
     Player player,
     List<PlexChapter> chapters,
     bool chaptersLoaded,
   ) {
-    BaseVideoControlSheet.showSheet(
+    return BaseVideoControlSheet.showSheet(
       context: context,
       builder: (context) => ChapterSheet(
         player: player,

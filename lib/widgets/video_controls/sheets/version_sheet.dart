@@ -15,13 +15,13 @@ class VersionSheet extends StatelessWidget {
     required this.onVersionSelected,
   });
 
-  static void show(
+  static Future<void> show(
     BuildContext context,
     List<PlexMediaVersion> availableVersions,
     int selectedMediaIndex,
     Function(int) onVersionSelected,
   ) {
-    BaseVideoControlSheet.showSheet(
+    return BaseVideoControlSheet.showSheet(
       context: context,
       builder: (context) => VersionSheet(
         availableVersions: availableVersions,
