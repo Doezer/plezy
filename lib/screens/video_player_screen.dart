@@ -7,7 +7,6 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:os_media_controls/os_media_controls.dart';
 import 'package:provider/provider.dart';
 
-import '../client/plex_client.dart';
 import '../models/plex_media_info.dart';
 import '../models/plex_media_version.dart';
 import '../models/plex_metadata.dart';
@@ -99,19 +98,22 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
     }
 
     // Update current item in playback state provider
-    try {
-      final playbackState = context.read<PlaybackStateProvider>();
+    // Must be done after build phase to avoid calling notifyListeners during build
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      try {
+        final playbackState = context.read<PlaybackStateProvider>();
 
-      // If this item doesn't have a playQueueItemID, it's a standalone item
-      // Clear any existing queue so next/previous work correctly for this content
-      if (widget.metadata.playQueueItemID == null) {
-        playbackState.clearShuffle();
-      } else {
-        playbackState.setCurrentItem(widget.metadata);
+        // If this item doesn't have a playQueueItemID, it's a standalone item
+        // Clear any existing queue so next/previous work correctly for this content
+        if (widget.metadata.playQueueItemID == null) {
+          playbackState.clearShuffle();
+        } else {
+          playbackState.setCurrentItem(widget.metadata);
+        }
+      } catch (e) {
+        // Provider might not be available yet
       }
-    } catch (e) {
-      // Provider might not be available yet
-    }
+    });
 
     // Register app lifecycle observer
     WidgetsBinding.instance.addObserver(this);
@@ -1270,6 +1272,35 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
     Future<void> processTracks(Tracks tracks) async {
       appLogger.d('Starting track selection process');
 
+      // Load series subtitle preferences if this is an episode
+      String? seriesSubtitleLanguage;
+      if (widget.metadata.type.toLowerCase() == 'episode' &&
+          widget.metadata.grandparentRatingKey != null &&
+          widget.metadata.subtitleLanguage == null) {
+        try {
+          final client = context.plexClient.client;
+          if (client != null) {
+            appLogger.d(
+              'Loading series subtitle preferences from ratingKey: ${widget.metadata.grandparentRatingKey}',
+            );
+            final seriesMetadata = await client.getMetadata(
+              widget.metadata.grandparentRatingKey!,
+            );
+            if (seriesMetadata != null &&
+                seriesMetadata.subtitleLanguage != null) {
+              appLogger.d(
+                'Found series subtitle preference: ${seriesMetadata.subtitleLanguage}',
+              );
+              seriesSubtitleLanguage = seriesMetadata.subtitleLanguage;
+            } else {
+              appLogger.d('No series subtitle preference found');
+            }
+          }
+        } catch (e) {
+          appLogger.w('Failed to load series subtitle preferences', error: e);
+        }
+      }
+
       // Get profile settings for track selection
       final profileSettings = context.profileSettings;
 
@@ -1415,31 +1446,31 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
         appLogger.d('Priority 1: No preferred track from navigation');
       }
 
-      // Priority 2: If no preferred match, try per-media language preference
-      if (subtitleToSelect == null &&
-          widget.metadata.subtitleLanguage != null) {
+      // Priority 2: If no preferred match, try per-media language preference (or series preference for episodes)
+      final subtitleLangPref =
+          widget.metadata.subtitleLanguage ?? seriesSubtitleLanguage;
+      if (subtitleToSelect == null && subtitleLangPref != null) {
         appLogger.d(
           'Priority 2: Checking per-media subtitle language preference',
         );
         appLogger.d(
-          '  Per-media subtitle language: ${widget.metadata.subtitleLanguage}',
+          '  Per-media subtitle language: $subtitleLangPref',
         );
         // Check if subtitle should be disabled
-        if (widget.metadata.subtitleLanguage == 'none' ||
-            widget.metadata.subtitleLanguage!.isEmpty) {
+        if (subtitleLangPref == 'none' || subtitleLangPref.isEmpty) {
           appLogger.d('  Per-media preference: Subtitles OFF');
           subtitleToSelect = SubtitleTrack.no();
         } else if (realSubtitleTracks.isNotEmpty) {
           final matchedTrack = realSubtitleTracks.firstWhere(
             (track) => _languageMatches(
               track.language,
-              widget.metadata.subtitleLanguage,
+              subtitleLangPref,
             ),
             orElse: () => realSubtitleTracks.first,
           );
           if (_languageMatches(
             matchedTrack.language,
-            widget.metadata.subtitleLanguage,
+            subtitleLangPref,
           )) {
             subtitleToSelect = matchedTrack;
             appLogger.d('  Matched per-media subtitle language preference');
@@ -1796,7 +1827,11 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
 
     try {
       if (!mounted) return;
-      final client = context.read<PlexClient>();
+      final client = context.client;
+      if (client == null) {
+        appLogger.w('PlexClient not available, cannot save audio preference');
+        return;
+      }
       await client.setMetadataPreferences(
         targetRatingKey,
         audioLanguage: languageCode,
@@ -1843,7 +1878,11 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen>
 
     try {
       if (!mounted) return;
-      final client = context.read<PlexClient>();
+      final client = context.client;
+      if (client == null) {
+        appLogger.w('PlexClient not available, cannot save subtitle preference');
+        return;
+      }
       await client.setMetadataPreferences(
         targetRatingKey,
         subtitleLanguage: languageCode,
