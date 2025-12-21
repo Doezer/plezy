@@ -52,6 +52,11 @@ class MediaCard extends StatefulWidget {
 class MediaCardState extends State<MediaCard> {
   final _contextMenuKey = GlobalKey<MediaContextMenuState>();
 
+  // Cache semantic label and local poster path to avoid re-computing them on every build.
+  // This is particularly impactful for large grids of media cards, where unnecessary
+  // build cycles can cause jank from repeated string formatting and provider lookups.
+
+  // The semantic label is derived from widget properties and is safe to compute once.
   late String _semanticLabel;
 
   // The local poster path depends on a provider, so it's computed when dependencies change.
