@@ -19,7 +19,6 @@ import '../utils/endpoint_failover_interceptor.dart';
 import '../utils/app_logger.dart';
 import '../utils/log_redaction_manager.dart';
 import '../utils/plex_cache_parser.dart';
-import '../utils/plex_url_helper.dart';
 import 'plex_api_cache.dart';
 
 /// Constants for Plex stream types
@@ -1918,7 +1917,11 @@ class PlexClient {
   }
 
   /// Get headers for authenticated requests (e.g., for image fetching)
-  Map<String, String> get httpHeaders => {
-        'X-Plex-Token': config.token,
-      };
+  Map<String, String> get httpHeaders {
+    final headers = <String, String>{};
+    if (config.token.isNotEmpty) {
+      headers['X-Plex-Token'] = config.token;
+    }
+    return headers;
+  }
 }

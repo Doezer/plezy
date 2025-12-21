@@ -248,9 +248,8 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
                     final client = _getClientForMetadata(context);
                     if (client == null) return;
                     await downloadProvider.resumeDownload(globalKey, client);
-                    if (context.mounted) {
-                      showAppSnackBar(context, 'Download resumed');
-                    }
+                    if (!mounted) return;
+                    showAppSnackBar(context, 'Download resumed');
                   },
                   icon: const AppIcon(Symbols.pause_circle_outline_rounded, fill: 1),
                   tooltip: 'Resume download',
@@ -275,13 +274,11 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
                     try {
                       await downloadProvider.queueDownload(metadata, client);
 
-                      if (context.mounted) {
-                        showSuccessSnackBar(context, t.downloads.downloadQueued);
-                      }
+                      if (!mounted) return;
+                      showSuccessSnackBar(context, t.downloads.downloadQueued);
                     } on CellularDownloadBlockedException {
-                      if (context.mounted) {
-                        showErrorSnackBar(context, t.settings.cellularDownloadBlocked);
-                      }
+                      if (!mounted) return;
+                      showErrorSnackBar(context, t.settings.cellularDownloadBlocked);
                     }
                   },
                   icon: const AppIcon(Symbols.error_outline_rounded, fill: 1),
@@ -312,24 +309,22 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
                       ),
                     );
 
-                    if (action == 'delete' && context.mounted) {
+                    if (!mounted) return;
+                    if (action == 'delete') {
                       await downloadProvider.deleteDownload(globalKey);
-                      if (context.mounted) {
-                        showSuccessSnackBar(context, t.downloads.downloadDeleted);
-                      }
-                    } else if (action == 'retry' && context.mounted) {
+                      if (!mounted) return;
+                      showSuccessSnackBar(context, t.downloads.downloadDeleted);
+                    } else if (action == 'retry') {
                       final client = _getClientForMetadata(context);
                       if (client == null) return;
                       await downloadProvider.deleteDownload(globalKey);
                       try {
                         await downloadProvider.queueDownload(metadata, client);
-                        if (context.mounted) {
-                          showSuccessSnackBar(context, t.downloads.downloadQueued);
-                        }
+                        if (!mounted) return;
+                        showSuccessSnackBar(context, t.downloads.downloadQueued);
                       } on CellularDownloadBlockedException {
-                        if (context.mounted) {
-                          showErrorSnackBar(context, t.settings.cellularDownloadBlocked);
-                        }
+                        if (!mounted) return;
+                        showErrorSnackBar(context, t.settings.cellularDownloadBlocked);
                       }
                     }
                   },

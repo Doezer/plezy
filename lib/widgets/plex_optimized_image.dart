@@ -300,7 +300,10 @@ class PlexOptimizedImage extends StatelessWidget {
           cacheKey: effectiveCacheKey,
           placeholder: placeholder != null ? placeholder! : (context, url) => _buildPlaceholder(context),
           errorWidget: errorWidget != null ? errorWidget! : (context, url, error) => _buildErrorWidget(context, error),
-          httpHeaders: client?.httpHeaders,
+          httpHeaders: {
+            'User-Agent': 'Plezy Flutter Client',
+            ...?client?.httpHeaders,
+          },
         );
       },
     );
