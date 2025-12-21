@@ -185,14 +185,12 @@ class _AuthScreenState extends State<AuthScreen> {
     }
   }
 
-  void _retryAuthentication() {
+  void _cancelAuthentication() {
     setState(() {
       _shouldCancelPolling = true;
       _isAuthenticating = false;
       _qrAuthUrl = null;
     });
-    // Start new authentication after a brief delay to ensure cleanup
-    Future.delayed(const Duration(milliseconds: 100), _startAuthentication);
   }
 
   void _handleDebugTap() {
@@ -422,15 +420,15 @@ class _AuthScreenState extends State<AuthScreen> {
     );
   }
 
-  Widget _buildRetryButton() {
+  Widget _buildCancelButton() {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         const SizedBox(height: 24),
         OutlinedButton(
-          onPressed: _retryAuthentication,
+          onPressed: _cancelAuthentication,
           style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24)),
-          child: Text(t.auth.retry),
+          child: Text(t.auth.cancel),
         ),
       ],
     );
@@ -458,7 +456,7 @@ class _AuthScreenState extends State<AuthScreen> {
             ),
           ),
         ),
-        _buildRetryButton(),
+        _buildCancelButton(),
       ],
     );
   }
@@ -475,7 +473,7 @@ class _AuthScreenState extends State<AuthScreen> {
           textAlign: TextAlign.center,
           style: const TextStyle(color: Colors.grey),
         ),
-        _buildRetryButton(),
+        _buildCancelButton(),
       ],
     );
   }
