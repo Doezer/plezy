@@ -770,17 +770,17 @@ class PlexClient {
     return episodes.where((ep) => ep.isEpisode && (ep.viewCount ?? 0) == 0).toList();
   }
 
-  /// Get thumbnail URL
+  /// Get thumbnail URL (without token - pass via headers)
   String getThumbnailUrl(String? thumbPath) {
     if (thumbPath == null || thumbPath.isEmpty) return '';
 
     // Remove leading slash if present
     final path = thumbPath.startsWith('/') ? thumbPath.substring(1) : thumbPath;
 
-    return '${config.baseUrl}/$path'.withPlexToken(config.token);
+    return '${config.baseUrl}/$path';
   }
 
-  /// Get video URL for direct playback
+  /// Get video URL for direct playback (without token - pass via headers)
   /// [mediaIndex] specifies which Media item to use (defaults to 0 - first version)
   /// Uses cache for offline mode support and network fallback.
   Future<String?> getVideoUrl(String ratingKey, {int mediaIndex = 0}) async {
@@ -802,7 +802,7 @@ class PlexClient {
 
         if (partKey != null) {
           // Return direct play URL
-          return '${config.baseUrl}$partKey'.withPlexToken(config.token);
+          return '${config.baseUrl}$partKey';
         }
       }
     }
@@ -978,7 +978,7 @@ class PlexClient {
           final chapters = _parseChapters(metadataJson);
 
           return PlexMediaInfo(
-            videoUrl: '${config.baseUrl}$partKey'.withPlexToken(config.token),
+            videoUrl: '${config.baseUrl}$partKey',
             audioTracks: streams.audio,
             subtitleTracks: streams.subtitles,
             chapters: chapters,
@@ -1035,7 +1035,7 @@ class PlexClient {
 
         if (partKey != null) {
           // Get video URL
-          videoUrl = '${config.baseUrl}$partKey'.withPlexToken(config.token);
+          videoUrl = '${config.baseUrl}$partKey';
 
           // Parse streams using helper
           final streams = _parseStreams(part['Stream'] as List<dynamic>?);
@@ -1916,4 +1916,9 @@ class PlexClient {
       await _onEndpointChanged(newBaseUrl);
     }
   }
+
+  /// Get headers for authenticated requests (e.g., for image fetching)
+  Map<String, String> get httpHeaders => {
+        'X-Plex-Token': config.token,
+      };
 }

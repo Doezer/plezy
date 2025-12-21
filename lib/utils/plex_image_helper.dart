@@ -90,10 +90,8 @@ class PlexImageHelper {
     final baseUrl = client.config.baseUrl;
     final token = client.config.token;
 
-    // URL encode the original path with token
-    final encodedPath = Uri.encodeComponent(
-      '$originalPath${originalPath.contains('?') ? '&' : '?'}X-Plex-Token=$token',
-    );
+    // URL encode the original path
+    final encodedPath = Uri.encodeComponent(originalPath);
 
     // Build the transcode URL
     final transcodeParams = {

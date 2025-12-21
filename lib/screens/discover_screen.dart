@@ -1238,6 +1238,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
 
                       return CachedNetworkImage(
                         imageUrl: imageUrl,
+                        httpHeaders: client.httpHeaders,
                         fit: BoxFit.cover,
                         placeholder: (context, url) =>
                             Container(color: Theme.of(context).colorScheme.surfaceContainerHighest),
@@ -1299,6 +1300,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
 
                             return CachedNetworkImage(
                               imageUrl: logoUrl,
+                              httpHeaders: client.httpHeaders,
                               filterQuality: FilterQuality.medium,
                               fit: BoxFit.contain,
                               memCacheWidth: (400 * dpr).clamp(200, 800).round(),

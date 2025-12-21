@@ -1,4 +1,8 @@
+import 'dart:io';
+
+import 'package:dio/dio.dart';
 import 'package:os_media_controls/os_media_controls.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:rate_limiter/rate_limiter.dart';
 
 import 'plex_client.dart';
@@ -38,14 +42,24 @@ class MediaControlsManager {
   /// This includes title, artist, artwork, and duration.
   Future<void> updateMetadata({required PlexMetadata metadata, PlexClient? client, Duration? duration}) async {
     try {
-      // Build artwork URL if client is available
-      String? artworkUrl;
+      // Download artwork if available
+      String? artworkPath;
       if (client != null && metadata.thumb != null) {
         try {
-          artworkUrl = client.getThumbnailUrl(metadata.thumb!);
-          appLogger.d('Artwork URL for media controls: $artworkUrl');
+          final artworkUrl = client.getThumbnailUrl(metadata.thumb!);
+          final tempDir = await getTemporaryDirectory();
+          final artworkFile = File('${tempDir.path}/artwork_${metadata.ratingKey}.jpg');
+
+          await Dio().download(
+            artworkUrl,
+            artworkFile.path,
+            options: Options(headers: client.httpHeaders),
+          );
+
+          artworkPath = artworkFile.path;
+          appLogger.d('Artwork downloaded for media controls: $artworkPath');
         } catch (e) {
-          appLogger.w('Failed to build artwork URL', error: e);
+          appLogger.w('Failed to download artwork for media controls', error: e);
         }
       }
 
@@ -54,7 +68,7 @@ class MediaControlsManager {
         MediaMetadata(
           title: metadata.title,
           artist: _buildArtist(metadata),
-          artworkUrl: artworkUrl,
+          artworkUrl: artworkPath,
           duration: duration,
         ),
       );

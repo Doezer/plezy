@@ -1063,6 +1063,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
 
                                   return CachedNetworkImage(
                                     imageUrl: imageUrl,
+                                    httpHeaders: client?.httpHeaders,
                                     fit: BoxFit.cover,
                                     placeholder: (context, url) => const PlaceholderContainer(),
                                     errorWidget: (context, url, error) => const PlaceholderContainer(),
@@ -1147,6 +1148,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
 
                                         return CachedNetworkImage(
                                           imageUrl: logoUrl,
+                                          httpHeaders: client?.httpHeaders,
                                           filterQuality: FilterQuality.medium,
                                           fit: BoxFit.contain,
                                           alignment: Alignment.centerLeft,
@@ -1294,6 +1296,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
                                           child: actor.thumb != null
                                               ? CachedNetworkImage(
                                                   imageUrl: actor.thumb!,
+                                                  httpHeaders: _getClientForMetadata(context)?.httpHeaders,
                                                   width: 120,
                                                   height: 120,
                                                   fit: BoxFit.cover,

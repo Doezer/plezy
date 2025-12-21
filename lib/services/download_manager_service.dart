@@ -603,7 +603,7 @@ class DownloadManagerService {
       await file.parent.create(recursive: true);
 
       // Download the artwork
-      await _dio.download(url, filePath);
+      await _dio.download(url, filePath, options: Options(headers: client.httpHeaders));
       appLogger.i('Downloaded artwork: $artworkPath -> $filePath');
     } catch (e, stack) {
       appLogger.w('Failed to download artwork: $artworkPath', error: e, stackTrace: stack);
