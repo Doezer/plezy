@@ -1919,8 +1919,9 @@ class PlexClient {
   /// Get headers for authenticated requests (e.g., for image fetching)
   Map<String, String> get httpHeaders {
     final headers = <String, String>{};
-    if (config.token.isNotEmpty) {
-      headers['X-Plex-Token'] = config.token;
+    final token = config.token;
+    if (token.isNotEmpty) {
+      headers['X-Plex-Token'] = token;
     }
     return headers;
   }

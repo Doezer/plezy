@@ -318,6 +318,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
                       final client = _getClientForMetadata(context);
                       if (client == null) return;
                       await downloadProvider.deleteDownload(globalKey);
+                      if (!mounted) return;
                       try {
                         await downloadProvider.queueDownload(metadata, client);
                         if (!mounted) return;
