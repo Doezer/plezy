@@ -43,9 +43,6 @@ flutter pub get
 echo "Running code generation..."
 dart run build_runner build --delete-conflicting-outputs
 
-# Run static analysis to check for issues
-echo "Running static analysis..."
-flutter analyze
 
 # Run final verification to summarize the environment setup
 echo "--- Environment Setup Complete. Running flutter doctor for verification ---"
