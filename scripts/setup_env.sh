@@ -35,18 +35,12 @@ cd - > /dev/null
 # Add the specific Flutter SDK to the PATH for the remainder of this script's execution
 export PATH="$FLUTTER_SDK_DIR/bin:$PATH"
 
-# Install project dependencies
-echo "Installing project dependencies..."
+# Install and upgrade project dependencies
+echo "Installing and upgrading project dependencies..."
 flutter pub get
-
-# Run code generation, deleting any conflicting outputs
-echo "Running code generation..."
-dart run build_runner build --delete-conflicting-outputs
+flutter pub upgrade
 
 
-# Run final verification to summarize the environment setup
-echo "--- Environment Setup Complete. Running flutter doctor for verification ---"
-flutter doctor
 
 echo "---"
 echo "SUCCESS: The environment is set up for this script's execution."
