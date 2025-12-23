@@ -176,18 +176,21 @@ class MpvPlayerCore: NSObject {
     }
 
     @objc private func enterBackground() {
-        // Disable video output to fix black screen when returning from background
-        print("[MpvPlayerCore] Entering background - disabling video")
+        // Detach video output to prevent black screen on resume
+        // Setting wid to 0 tells MPV there is no window to render to, but keeps decoding active
+        print("[MpvPlayerCore] Entering background - detaching video surface")
         if mpv != nil {
-            mpv_set_option_string(mpv, "vid", "no")
+            var wid: Int64 = 0
+            checkError(mpv_set_option(mpv, "wid", MPV_FORMAT_INT64, &wid))
         }
     }
 
     @objc private func enterForeground() {
-        // Re-enable video output
-        print("[MpvPlayerCore] Entering foreground - enabling video")
-        if mpv != nil {
-            mpv_set_option_string(mpv, "vid", "auto")
+        // Re-attach video output
+        print("[MpvPlayerCore] Entering foreground - re-attaching video surface")
+        if mpv != nil, let metalLayer = metalLayer {
+            var layer = metalLayer
+            checkError(mpv_set_option(mpv, "wid", MPV_FORMAT_INT64, &layer))
         }
     }
 
