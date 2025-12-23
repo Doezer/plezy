@@ -1,0 +1,59 @@
+#!/bin/bash
+set -e
+
+# Define the directory for the Flutter SDK to avoid cloning it into the project
+FLUTTER_SDK_DIR=~/plezy_flutter_sdk
+
+# --- Flutter SDK Setup ---
+echo "--- Setting up Flutter SDK in $FLUTTER_SDK_DIR ---"
+
+# Clone the Flutter repository if it doesn't exist in the dedicated directory
+if [ ! -d "$FLUTTER_SDK_DIR" ]; then
+  echo "Cloning Flutter repository to $FLUTTER_SDK_DIR..."
+  git clone https://github.com/flutter/flutter.git "$FLUTTER_SDK_DIR"
+fi
+
+# Navigate to the Flutter SDK directory to run git commands
+cd "$FLUTTER_SDK_DIR"
+
+# Checkout the correct version tag
+echo "Checking out Flutter version 3.8.1..."
+git checkout 3.8.1
+
+# Pre-cache the Flutter SDK binaries. Running a command like 'flutter doctor'
+# triggers the download of the Dart SDK and other platform-specific tools.
+echo "Downloading necessary Flutter SDK binaries..."
+"$FLUTTER_SDK_DIR/bin/flutter" doctor
+
+# --- Project Setup ---
+echo "--- Setting up the Plezy project ---"
+
+# Go back to the original directory where the script was executed
+cd - > /dev/null
+
+# Add the specific Flutter SDK to the PATH for the remainder of this script's execution
+export PATH="$FLUTTER_SDK_DIR/bin:$PATH"
+
+# Install project dependencies
+echo "Installing project dependencies..."
+flutter pub get
+
+# Run code generation, deleting any conflicting outputs
+echo "Running code generation..."
+dart run build_runner build --delete-conflicting-outputs
+
+# Run static analysis to check for issues
+echo "Running static analysis..."
+flutter analyze
+
+# Run final verification to summarize the environment setup
+echo "--- Environment Setup Complete. Running flutter doctor for verification ---"
+flutter doctor
+
+echo "---"
+echo "SUCCESS: The environment is set up for this script's execution."
+echo
+echo "To use this version of Flutter in your current terminal session, run:"
+echo "  export PATH=\"$FLUTTER_SDK_DIR/bin:\$PATH\""
+echo
+echo "For permanent use, add this line to your shell's configuration file (e.g., ~/.bashrc, ~/.zshrc)."
