@@ -685,6 +685,16 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
         // Reset first frame flag for new video
         _hasFirstFrame.value = false;
 
+        // Set token header for MPV (handles cases where query param auth fails or is rejected)
+        if (!widget.isOffline) {
+          final client = _getClientForMetadata(context);
+          final token = client.config.token;
+          if (token != null) {
+            // Pass token via http-header-fields. MPV expects 'Field: Value', multiple fields separated by comma.
+            await player!.setProperty('http-header-fields', 'X-Plex-Token: $token');
+          }
+        }
+
         // Pass resume position if available
         final resumePosition = widget.metadata.viewOffset != null
             ? Duration(milliseconds: widget.metadata.viewOffset!)
