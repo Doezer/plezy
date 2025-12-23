@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:dio/dio.dart';
 // Note: Actual unit testing of testConnectionWithLatency is limited because it instantiates
 // its own Dio client internally. This test file is primarily a placeholder to ensure
 // the project compiles without missing dependency errors while confirming the
