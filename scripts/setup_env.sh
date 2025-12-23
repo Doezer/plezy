@@ -16,9 +16,10 @@ fi
 # Navigate to the Flutter SDK directory to run git commands
 cd "$FLUTTER_SDK_DIR"
 
-# Checkout the correct version tag
-echo "Checking out Flutter version 3.8.1..."
-git checkout 3.8.1
+# Switch to the stable channel and pull the latest changes
+echo "Switching to the stable channel and pulling the latest changes..."
+git checkout stable
+git pull
 
 # Pre-cache the Flutter SDK binaries. Running a command like 'flutter doctor'
 # triggers the download of the Dart SDK and other platform-specific tools.
