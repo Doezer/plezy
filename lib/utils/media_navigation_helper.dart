@@ -5,6 +5,7 @@ import '../screens/collection_detail_screen.dart';
 import '../screens/media_detail_screen.dart';
 import '../screens/season_detail_screen.dart';
 import '../screens/playlist/playlist_detail_screen.dart';
+import '../screens/photo_viewer_screen.dart';
 import 'video_player_navigation.dart';
 
 /// Result of media navigation indicating what action was taken
@@ -80,6 +81,13 @@ Future<MediaNavigationResult> navigateToMediaItem(
     case PlexMediaType.season:
       await Navigator.push(context, MaterialPageRoute(builder: (context) => SeasonDetailScreen(season: metadata)));
       onRefresh?.call(metadata.ratingKey);
+      return MediaNavigationResult.navigated;
+
+    case PlexMediaType.photo:
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => PhotoViewerScreen(metadata: metadata, isOffline: isOffline)),
+      );
       return MediaNavigationResult.navigated;
 
     default:
