@@ -144,10 +144,12 @@ class PlexClient {
   }
 
   /// Test connection to a specific URL with token and measure latency
+  /// If [expectedMachineIdentifier] is provided, validates that the server identity matches.
   static Future<ConnectionTestResult> testConnectionWithLatency(
     String baseUrl,
     String token, {
     Duration timeout = const Duration(seconds: 5),
+    String? expectedMachineIdentifier,
   }) async {
     final stopwatch = Stopwatch()..start();
 
@@ -163,10 +165,31 @@ class PlexClient {
         ),
       );
 
-      final response = await dio.get('/', options: Options(headers: {'X-Plex-Token': token}));
+      final response = await dio.get(
+        '/',
+        options: Options(headers: {'X-Plex-Token': token, 'Accept': 'application/json'}),
+      );
 
       stopwatch.stop();
-      final success = response.statusCode == 200 || response.statusCode == 401;
+      bool success = response.statusCode == 200 || response.statusCode == 401;
+
+      // Verify machineIdentifier if requested and request was successful (200 OK)
+      if (success && expectedMachineIdentifier != null && response.statusCode == 200) {
+        if (response.data is Map && response.data['MediaContainer'] != null) {
+          final actualId = response.data['MediaContainer']['machineIdentifier'];
+          if (actualId != expectedMachineIdentifier) {
+            appLogger.w(
+              'Connection test failed: machineIdentifier mismatch',
+              error: {'expected': expectedMachineIdentifier, 'actual': actualId, 'url': baseUrl},
+            );
+            success = false;
+          }
+        } else {
+          // Response structure invalid or not JSON
+          appLogger.w('Connection test failed: invalid response structure', error: {'url': baseUrl});
+          success = false;
+        }
+      }
 
       return ConnectionTestResult(success: success, latencyMs: stopwatch.elapsedMilliseconds);
     } catch (e) {
@@ -181,11 +204,17 @@ class PlexClient {
     String token, {
     int attempts = 3,
     Duration timeout = const Duration(seconds: 5),
+    String? expectedMachineIdentifier,
   }) async {
     final results = <ConnectionTestResult>[];
 
     for (int i = 0; i < attempts; i++) {
-      final result = await testConnectionWithLatency(baseUrl, token, timeout: timeout);
+      final result = await testConnectionWithLatency(
+        baseUrl,
+        token,
+        timeout: timeout,
+        expectedMachineIdentifier: expectedMachineIdentifier,
+      );
 
       // If any attempt fails, return failed result immediately
       if (!result.success) {

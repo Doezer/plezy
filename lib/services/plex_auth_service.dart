@@ -390,6 +390,7 @@ class PlexServer {
           cachedCandidate.url,
           accessToken,
           timeout: preferredTimeout,
+          expectedMachineIdentifier: clientIdentifier,
         );
 
         if (result.success) {
@@ -409,7 +410,12 @@ class PlexServer {
       appLogger.d('Running connection race to find first working endpoint', error: {'candidateCount': totalCandidates});
 
       for (final candidate in candidates) {
-        PlexClient.testConnectionWithLatency(candidate.url, accessToken, timeout: raceTimeout).then((result) {
+        PlexClient.testConnectionWithLatency(
+          candidate.url,
+          accessToken,
+          timeout: raceTimeout,
+          expectedMachineIdentifier: clientIdentifier,
+        ).then((result) {
           completedTests++;
 
           if (result.success && !completer.isCompleted) {
@@ -446,7 +452,12 @@ class PlexServer {
 
     await Future.wait(
       candidates.map((candidate) async {
-        final result = await PlexClient.testConnectionWithAverageLatency(candidate.url, accessToken, attempts: 2);
+        final result = await PlexClient.testConnectionWithAverageLatency(
+          candidate.url,
+          accessToken,
+          attempts: 2,
+          expectedMachineIdentifier: clientIdentifier,
+        );
 
         if (result.success) {
           candidateResults[candidate] = result;
@@ -632,6 +643,7 @@ class PlexServer {
       httpsUrl,
       accessToken,
       timeout: const Duration(seconds: 4),
+      expectedMachineIdentifier: clientIdentifier,
     );
 
     if (!result.success) {
