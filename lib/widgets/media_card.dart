@@ -91,6 +91,8 @@ class MediaCardState extends State<MediaCard> {
         baseLabel = t.accessibility.mediaCardSeason(title: item.displayTitle, seasonInfo: seasonInfo);
       case PlexMediaType.movie:
         baseLabel = t.accessibility.mediaCardMovie(title: item.displayTitle);
+      case PlexMediaType.photo:
+        baseLabel = item.displayTitle;
       default:
         baseLabel = t.accessibility.mediaCardShow(title: item.displayTitle);
     }

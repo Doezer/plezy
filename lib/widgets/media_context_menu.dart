@@ -145,15 +145,15 @@ class MediaContextMenuState extends State<MediaContextMenu> {
     } else {
       // Regular menu items for other types
 
-      // Mark as Watched
-      if (!metadata!.isWatched || isPartiallyWatched) {
+      // Mark as Watched (skip for photos)
+      if (mediaType != PlexMediaType.photo && (!metadata!.isWatched || isPartiallyWatched)) {
         menuActions.add(
           _MenuAction(value: 'watch', icon: Symbols.check_circle_outline_rounded, label: t.mediaMenu.markAsWatched),
         );
       }
 
-      // Mark as Unwatched
-      if (metadata.isWatched || isPartiallyWatched) {
+      // Mark as Unwatched (skip for photos)
+      if (mediaType != PlexMediaType.photo && (metadata!.isWatched || isPartiallyWatched)) {
         menuActions.add(
           _MenuAction(
             value: 'unwatch',
