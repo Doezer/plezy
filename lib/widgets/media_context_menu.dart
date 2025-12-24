@@ -187,12 +187,12 @@ class MediaContextMenuState extends State<MediaContextMenu> {
 
       // Go to Series (for episodes and seasons)
       if ((mediaType == PlexMediaType.episode || mediaType == PlexMediaType.season) &&
-          metadata.grandparentTitle != null) {
+          metadata!.grandparentTitle != null) {
         menuActions.add(_MenuAction(value: 'series', icon: Symbols.tv_rounded, label: t.mediaMenu.goToSeries));
       }
 
       // Go to Season (for episodes)
-      if (mediaType == PlexMediaType.episode && metadata.parentTitle != null) {
+      if (mediaType == PlexMediaType.episode && metadata!.parentTitle != null) {
         menuActions.add(
           _MenuAction(value: 'season', icon: Symbols.playlist_play_rounded, label: t.mediaMenu.goToSeason),
         );
@@ -216,7 +216,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
           mediaType == PlexMediaType.show ||
           mediaType == PlexMediaType.season) {
         final downloadProvider = Provider.of<DownloadProvider>(context, listen: false);
-        final globalKey = '${metadata.serverId}:${metadata.ratingKey}';
+        final globalKey = '${metadata!.serverId}:${metadata.ratingKey}';
         final isDownloaded = downloadProvider.isDownloaded(globalKey);
 
         if (isDownloaded) {

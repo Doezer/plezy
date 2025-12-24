@@ -3,7 +3,6 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
 
 import '../models/plex_metadata.dart';
-import '../services/plex_client.dart';
 import '../utils/plex_image_helper.dart';
 import '../utils/provider_extensions.dart';
 import '../widgets/app_bar_back_button.dart';
@@ -71,7 +70,6 @@ class PhotoViewerScreen extends StatelessWidget {
                     maxHeight: mediaQuery.size.height * 2,
                     devicePixelRatio: mediaQuery.devicePixelRatio,
                     imageType: ImageType.art,
-                    upscale: false,
                   );
 
                   return CachedNetworkImage(
