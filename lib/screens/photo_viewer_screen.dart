@@ -57,9 +57,6 @@ class PhotoViewerScreen extends StatelessWidget {
                   }
 
                   final client = context.getClientForServer(metadata.serverId!);
-                  if (client == null) {
-                    return const PlaceholderContainer();
-                  }
 
                   // For photos, we try to get the original stream or a high res transcode.
                   final mediaQuery = MediaQuery.of(context);
