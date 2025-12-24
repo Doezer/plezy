@@ -216,7 +216,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
           mediaType == PlexMediaType.show ||
           mediaType == PlexMediaType.season) {
         final downloadProvider = Provider.of<DownloadProvider>(context, listen: false);
-        final globalKey = '${metadata!.serverId}:${metadata!.ratingKey}';
+        final globalKey = '${metadata!.serverId}:${metadata.ratingKey}';
         final isDownloaded = downloadProvider.isDownloaded(globalKey);
 
         if (isDownloaded) {
