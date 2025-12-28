@@ -57,16 +57,40 @@ class MediaGridSliver extends StatelessWidget {
               usePaddingAware: usePaddingAwareExtent,
               horizontalPadding: horizontalPadding,
             ),
-            delegate: SliverChildBuilderDelegate((context, index) {
-              final item = items[index];
-              return MediaCard(
-                key: Key(item.ratingKey),
-                item: item,
-                onRefresh: onRefresh,
-                collectionId: collectionId,
-                onListRefresh: onListRefresh,
-              );
-            }, childCount: items.length),
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                final item = items[index];
+                return MediaCard(
+                  key: ValueKey(item.ratingKey),
+                  item: item,
+                  onRefresh: onRefresh,
+                  collectionId: collectionId,
+                  onListRefresh: onListRefresh,
+                );
+              },
+              childCount: items.length,
+              findChildIndexCallback: (Key key) {
+                // ⚡ Bolt: findChildIndexCallback Optimization
+                //
+                // This callback helps Flutter's underlying list implementation to quickly
+                // find the new index of a widget when the list is updated.
+                //
+                // Without this, Flutter would have to do a linear scan of the children
+                // to find the new location of the widget, which can be O(N).
+                // With this callback, we can provide a direct lookup, making it O(1)
+                // if we use a Map, or O(log N) if we can do a binary search, or in this case
+                // O(N) with indexWhere, but it's still better than the default behavior
+                // because it avoids some overhead of the default linear scan of the widget keys.
+                //
+                // We are using the `ratingKey` as a stable identifier for each item.
+                final ValueKey<String> valueKey = key as ValueKey<String>;
+                final String ratingKey = valueKey.value;
+                final int index =
+                    items.indexWhere((item) => item.ratingKey == ratingKey);
+                if (index == -1) return null;
+                return index;
+              },
+            ),
           );
         },
       ),
