@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:plezy/theme/app_icon_theme.dart';
 import 'mono_tokens.dart';
 
 ThemeData monoTheme({required bool dark}) {
@@ -127,6 +128,7 @@ ThemeData monoTheme({required bool dark}) {
 
   return base.copyWith(
     extensions: [
+      const AppIconTheme(),
       MonoTokens(
         radiusSm: 8,
         radiusMd: 12,
