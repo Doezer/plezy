@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
+import '../theme/app_icon_theme.dart';
 
 /// Wrapper around [Icon] that centralizes our Material Symbols defaults.
-/// Defaults: fill=1 (filled) and weight=700 (bold). Update [AppIconDefaults]
-/// to tweak app-wide icon appearance from one place.
+/// Defaults are now managed by [AppIconTheme] to allow for const constructors
+/// and better performance.
 class AppIcon extends StatelessWidget {
   const AppIcon(
     this.icon, {
@@ -32,43 +33,21 @@ class AppIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (icon == null) return const SizedBox.shrink();
+
+    // Grab the theme extension for default values
+    final AppIconTheme? appIconTheme = Theme.of(context).extension<AppIconTheme>();
+
     return Icon(
       icon,
       size: size,
-      color: color,
-      fill: fill ?? AppIconDefaults.fill,
-      weight: weight ?? AppIconDefaults.weight,
-      grade: grade ?? AppIconDefaults.grade,
-      opticalSize: opticalSize ?? AppIconDefaults.opticalSize,
-      shadows: shadows ?? AppIconDefaults.shadows,
+      color: color ?? appIconTheme?.color,
+      fill: fill ?? appIconTheme?.fill,
+      weight: weight ?? appIconTheme?.weight,
+      grade: grade ?? appIconTheme?.grade,
+      opticalSize: opticalSize ?? appIconTheme?.opticalSize,
+      shadows: shadows ?? appIconTheme?.shadows,
       semanticLabel: semanticLabel,
       textDirection: textDirection,
     );
-  }
-}
-
-/// Central place to adjust default Material Symbol variations.
-class AppIconDefaults {
-  static double fill = 1;
-  static double weight = 700;
-  static double? grade;
-  static double? opticalSize;
-  static Color? color;
-  static List<Shadow>? shadows;
-
-  static void update({
-    double? fill,
-    double? weight,
-    double? grade,
-    double? opticalSize,
-    Color? color,
-    List<Shadow>? shadows,
-  }) {
-    if (fill != null) AppIconDefaults.fill = fill;
-    if (weight != null) AppIconDefaults.weight = weight;
-    if (grade != null) AppIconDefaults.grade = grade;
-    if (opticalSize != null) AppIconDefaults.opticalSize = opticalSize;
-    if (color != null) AppIconDefaults.color = color;
-    if (shadows != null) AppIconDefaults.shadows = shadows;
   }
 }
