@@ -7,6 +7,17 @@ import '../../services/plex_client.dart';
 import '../utils/plex_image_helper.dart';
 import 'media_card.dart';
 
+double _resolvedDimension(double? explicit, double constraintMax, double fallback) {
+  // Pick the explicit size when it's a finite positive number, otherwise
+  // fall back to the constraint or a sensible default so we don't end up
+  // with NaN/Infinity when rounding to ints for caching.
+  final candidate = explicit ?? (constraintMax.isFinite && constraintMax > 0 ? constraintMax : fallback);
+  if (candidate.isNaN || candidate.isInfinite || candidate <= 0) {
+    return fallback;
+  }
+  return candidate;
+}
+
 class PlexOptimizedImage extends StatelessWidget {
   final PlexClient? client;
   final String? imagePath;
@@ -237,17 +248,6 @@ class PlexOptimizedImage extends StatelessWidget {
       }
     }
 
-    double resolvedDimension(double? explicit, double constraintMax, double fallback) {
-      // Pick the explicit size when it's a finite positive number, otherwise
-      // fall back to the constraint or a sensible default so we don't end up
-      // with NaN/Infinity when rounding to ints for caching.
-      final candidate = explicit ?? (constraintMax.isFinite && constraintMax > 0 ? constraintMax : fallback);
-      if (candidate.isNaN || candidate.isInfinite || candidate <= 0) {
-        return fallback;
-      }
-      return candidate;
-    }
-
     // Return empty container if no image path
     if (imagePath == null || imagePath!.isEmpty) {
       return _buildFallback(context);
@@ -258,8 +258,8 @@ class PlexOptimizedImage extends StatelessWidget {
         final devicePixelRatio = MediaQuery.of(context).devicePixelRatio;
 
         // Calculate effective constraints with safe fallbacks
-        final effectiveWidth = resolvedDimension(width, constraints.maxWidth, 300.0);
-        final effectiveHeight = resolvedDimension(height, constraints.maxHeight, 450.0);
+        final effectiveWidth = _resolvedDimension(width, constraints.maxWidth, 300.0);
+        final effectiveHeight = _resolvedDimension(height, constraints.maxHeight, 450.0);
 
         // Get optimized image URL
         final imageUrl = PlexImageHelper.getOptimizedImageUrl(
