@@ -89,6 +89,10 @@ class _MainScreenState extends State<MainScreen> with RouteAware {
   final FocusScopeNode _contentFocusScope = FocusScopeNode(debugLabel: 'Content');
   bool _isSidebarFocused = false;
 
+  // Cache navigation destinations to prevent recreation on every build.
+  // This is a performance optimization to reduce unnecessary widget rebuilds.
+  late List<NavigationDestination> _navDestinations;
+
   @override
   void initState() {
     super.initState();
@@ -102,6 +106,7 @@ class _MainScreenState extends State<MainScreen> with RouteAware {
     _autoSwitchedToDownloads = _isOffline;
 
     _screens = _buildScreens(_isOffline);
+    _navDestinations = _buildNavDestinations(_isOffline);
 
     // Set up Watch Together callbacks immediately (must be synchronous to catch early messages)
     if (!_isOffline) {
@@ -258,6 +263,7 @@ class _MainScreenState extends State<MainScreen> with RouteAware {
     setState(() {
       _isOffline = newOffline;
       _screens = _buildScreens(_isOffline);
+      _navDestinations = _buildNavDestinations(_isOffline);
       _selectedLibraryGlobalKey = _isOffline ? null : _selectedLibraryGlobalKey;
 
       if (_isOffline) {
@@ -550,7 +556,7 @@ class _MainScreenState extends State<MainScreen> with RouteAware {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
         onDestinationSelected: _selectTab,
-        destinations: _buildNavDestinations(_isOffline),
+        destinations: _navDestinations,
       ),
     );
   }
