@@ -237,73 +237,84 @@ class PlexOptimizedImage extends StatelessWidget {
       }
     }
 
-    double resolvedDimension(double? explicit, double constraintMax, double fallback) {
-      // Pick the explicit size when it's a finite positive number, otherwise
-      // fall back to the constraint or a sensible default so we don't end up
-      // with NaN/Infinity when rounding to ints for caching.
-      final candidate = explicit ?? (constraintMax.isFinite && constraintMax > 0 ? constraintMax : fallback);
-      if (candidate.isNaN || candidate.isInfinite || candidate <= 0) {
-        return fallback;
-      }
-      return candidate;
-    }
-
     // Return empty container if no image path
     if (imagePath == null || imagePath!.isEmpty) {
       return _buildFallback(context);
     }
 
+    // Use specific MediaQuery selector to prevent unnecessary rebuilds
+    final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+
+    // If we have explicit finite dimensions, skip LayoutBuilder for better performance
+    if (width != null && width!.isFinite && height != null && height!.isFinite) {
+      return _buildImage(context, width!, height!, devicePixelRatio);
+    }
+
     return LayoutBuilder(
       builder: (context, constraints) {
-        final devicePixelRatio = MediaQuery.of(context).devicePixelRatio;
-
         // Calculate effective constraints with safe fallbacks
-        final effectiveWidth = resolvedDimension(width, constraints.maxWidth, 300.0);
-        final effectiveHeight = resolvedDimension(height, constraints.maxHeight, 450.0);
+        final effectiveWidth = _resolvedDimension(width, constraints.maxWidth, 300.0);
+        final effectiveHeight = _resolvedDimension(height, constraints.maxHeight, 450.0);
 
-        // Get optimized image URL
-        final imageUrl = PlexImageHelper.getOptimizedImageUrl(
-          client: client,
-          thumbPath: imagePath,
-          maxWidth: effectiveWidth,
-          maxHeight: effectiveHeight,
-          devicePixelRatio: devicePixelRatio,
-          enableTranscoding: enableTranscoding && PlexImageHelper.shouldTranscode(imagePath),
-          imageType: imageType,
-        );
-
-        if (imageUrl.isEmpty) {
-          return _buildFallback(context);
-        }
-
-        // Calculate memory cache dimensions
-        final scaledWidth = effectiveWidth * devicePixelRatio;
-        final scaledHeight = effectiveHeight * devicePixelRatio;
-        final (memWidth, memHeight) = PlexImageHelper.getMemCacheDimensions(
-          displayWidth: scaledWidth.isFinite && scaledWidth > 0 ? scaledWidth.round() : 0,
-          displayHeight: scaledHeight.isFinite && scaledHeight > 0 ? scaledHeight.round() : 0,
-        );
-
-        // Generate cache key if not provided
-        final effectiveCacheKey = cacheKey ?? _generateCacheKey(imageUrl, memWidth, memHeight);
-
-        return CachedNetworkImage(
-          imageUrl: imageUrl,
-          width: width,
-          height: height,
-          fit: fit,
-          filterQuality: filterQuality,
-          alignment: alignment,
-          fadeInDuration: fadeInDuration,
-          memCacheWidth: memWidth,
-          memCacheHeight: memHeight,
-          cacheKey: effectiveCacheKey,
-          placeholder: placeholder != null ? placeholder! : (context, url) => _buildPlaceholder(context),
-          errorWidget: errorWidget != null ? errorWidget! : (context, url, error) => _buildErrorWidget(context, error),
-          httpHeaders: {'User-Agent': 'Plezy Flutter Client'},
-        );
+        return _buildImage(context, effectiveWidth, effectiveHeight, devicePixelRatio);
       },
     );
+  }
+
+  /// Builds the optimized image with calculated dimensions.
+  Widget _buildImage(BuildContext context, double effectiveWidth, double effectiveHeight, double devicePixelRatio) {
+    // Get optimized image URL
+    final imageUrl = PlexImageHelper.getOptimizedImageUrl(
+      client: client,
+      thumbPath: imagePath,
+      maxWidth: effectiveWidth,
+      maxHeight: effectiveHeight,
+      devicePixelRatio: devicePixelRatio,
+      enableTranscoding: enableTranscoding && PlexImageHelper.shouldTranscode(imagePath),
+      imageType: imageType,
+    );
+
+    if (imageUrl.isEmpty) {
+      return _buildFallback(context);
+    }
+
+    // Calculate memory cache dimensions
+    final scaledWidth = effectiveWidth * devicePixelRatio;
+    final scaledHeight = effectiveHeight * devicePixelRatio;
+    final (memWidth, memHeight) = PlexImageHelper.getMemCacheDimensions(
+      displayWidth: scaledWidth.isFinite && scaledWidth > 0 ? scaledWidth.round() : 0,
+      displayHeight: scaledHeight.isFinite && scaledHeight > 0 ? scaledHeight.round() : 0,
+    );
+
+    // Generate cache key if not provided
+    final effectiveCacheKey = cacheKey ?? _generateCacheKey(imageUrl, memWidth, memHeight);
+
+    return CachedNetworkImage(
+      imageUrl: imageUrl,
+      width: width,
+      height: height,
+      fit: fit,
+      filterQuality: filterQuality,
+      alignment: alignment,
+      fadeInDuration: fadeInDuration,
+      memCacheWidth: memWidth,
+      memCacheHeight: memHeight,
+      cacheKey: effectiveCacheKey,
+      placeholder: placeholder != null ? placeholder! : (context, url) => _buildPlaceholder(context),
+      errorWidget: errorWidget != null ? errorWidget! : (context, url, error) => _buildErrorWidget(context, error),
+      httpHeaders: const {'User-Agent': 'Plezy Flutter Client'},
+    );
+  }
+
+  /// Pick the explicit size when it's a finite positive number, otherwise
+  /// fall back to the constraint or a sensible default so we don't end up
+  /// with NaN/Infinity when rounding to ints for caching.
+  static double _resolvedDimension(double? explicit, double constraintMax, double fallback) {
+    final candidate = explicit ?? (constraintMax.isFinite && constraintMax > 0 ? constraintMax : fallback);
+    if (candidate.isNaN || candidate.isInfinite || candidate <= 0) {
+      return fallback;
+    }
+    return candidate;
   }
 
   Widget _buildPlaceholder(BuildContext context) {
@@ -344,7 +355,7 @@ class PlexOptimizedImage extends StatelessWidget {
     );
   }
 
-  String _generateCacheKey(String imageUrl, int memWidth, int memHeight) {
+  static String _generateCacheKey(String imageUrl, int memWidth, int memHeight) {
     final urlHash = imageUrl.hashCode;
     return 'plex_optimized_${memWidth}x${memHeight}_$urlHash';
   }
