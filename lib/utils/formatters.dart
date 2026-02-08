@@ -1,5 +1,6 @@
 import 'package:duration/duration.dart';
 import 'package:duration/locale.dart';
+import 'package:intl/intl.dart';
 import '../i18n/strings.g.dart';
 
 /// Formats a number with a minimum number of digits using leading zeros.
@@ -121,24 +122,44 @@ String formatDurationWithSeconds(Duration duration) {
 ///
 /// Used for: video controls, chapters, episode durations.
 String formatDurationTimestamp(Duration duration) {
-  final hours = duration.inHours;
-  final minutes = duration.inMinutes.remainder(60);
-  final seconds = duration.inSeconds.remainder(60);
+  // Handle negative durations
+  final isNegative = duration.isNegative;
+  final absoluteDuration = duration.abs();
+
+  final hours = absoluteDuration.inHours;
+  final minutes = absoluteDuration.inMinutes.remainder(60);
+  final seconds = absoluteDuration.inSeconds.remainder(60);
+
+  final String result;
 
   if (hours > 0) {
-    return '$hours:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+    result = '$hours:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   } else {
-    return '$minutes:${seconds.toString().padLeft(2, '0')}';
+    result = '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
+
+  return isNegative ? '-$result' : result;
 }
 
-/// Formats a sync offset in milliseconds with sign indicator (e.g., "+150ms", "-250ms").
-/// This format is used for audio/subtitle synchronization adjustments.
+/// Formats a sync offset in milliseconds with sign indicator (e.g., "+150ms", "-15.1s").
+/// Shows milliseconds for values < 10s, decimal seconds for larger values.
 ///
 /// Used for: audio sync sheet, sync offset controls.
 String formatSyncOffset(double offsetMs) {
-  final sign = offsetMs >= 0 ? '+' : '';
-  return '$sign${offsetMs.round()}ms';
+  final sign = offsetMs >= 0 ? '+' : '-';
+  final absMs = offsetMs.abs().round();
+  final durationLocale = _getDurationLocale();
+
+  if (absMs >= 10000) {
+    // For values >= 10s, show decimal seconds (e.g., "+15.1s")
+    final seconds = (offsetMs.abs() / 1000).toStringAsFixed(1);
+    final unit = durationLocale.second(1, true);
+    return '$sign$seconds$unit';
+  }
+
+  // For values < 10s, show milliseconds (e.g., "+7300ms")
+  final unit = durationLocale.millisecond(1, true);
+  return '$sign$absMs$unit';
 }
 
 /// Gets the duration package locale based on the current app locale.
@@ -156,5 +177,35 @@ DurationLocale _getDurationLocale() {
   } catch (e) {
     // Fallback to English if language code is not supported
     return const EnglishDurationLocale();
+  }
+}
+
+/// Formats the clock time at which media will finish playing, given the remaining duration.
+/// Returns a localized time string like "6:12 PM" or "18:12" depending on locale.
+String formatFinishTime(Duration remaining, {double rate = 1.0}) {
+  final adjustedRemaining = remaining * (1.0 / rate);
+  final finishTime = DateTime.now().add(adjustedRemaining);
+  final formatter = DateFormat.jm(LocaleSettings.currentLocale.languageCode);
+  return formatter.format(finishTime);
+}
+
+/// Takes a list of strings and returns one long string with each item in the list concatenated by a bullet
+String toBulletedString(List<String> parts) {
+  return parts.join(' · ');
+}
+
+/// Takes a date string in the format "YYYY-MM-DD" and returns a localized full date string
+/// If there is any error, `dateString` is returned as is
+String formatFullDate(String dateString) {
+  try {
+    // Parse the date
+    final date = DateTime.parse(dateString);
+
+    // Create a DateFormat with the full date pattern for the current locale
+    final formatter = DateFormat.yMMMMd(LocaleSettings.currentLocale.languageCode);
+
+    return formatter.format(date);
+  } catch (e) {
+    return dateString;
   }
 }

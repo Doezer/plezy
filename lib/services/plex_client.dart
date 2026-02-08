@@ -6,6 +6,7 @@ import '../models/plex_config.dart';
 import '../models/play_queue_response.dart';
 import '../models/plex_file_info.dart';
 import '../models/plex_filter.dart';
+import '../models/plex_first_character.dart';
 import '../models/plex_hub.dart';
 import '../models/plex_library.dart';
 import '../models/plex_media_info.dart';
@@ -17,9 +18,11 @@ import '../models/plex_sort.dart';
 import '../models/plex_video_playback_data.dart';
 import '../utils/endpoint_failover_interceptor.dart';
 import '../utils/app_logger.dart';
+import '../utils/connection_constants.dart';
 import '../utils/log_redaction_manager.dart';
 import '../utils/plex_cache_parser.dart';
 import '../utils/plex_url_helper.dart';
+import '../utils/watch_state_notifier.dart';
 import 'plex_api_cache.dart';
 
 /// Constants for Plex stream types
@@ -33,8 +36,9 @@ class PlexStreamType {
 class ConnectionTestResult {
   final bool success;
   final int latencyMs;
+  final String? error;
 
-  ConnectionTestResult({required this.success, required this.latencyMs});
+  ConnectionTestResult({required this.success, required this.latencyMs, this.error});
 }
 
 class PlexClient {
@@ -85,8 +89,8 @@ class PlexClient {
       BaseOptions(
         baseUrl: config.baseUrl,
         headers: config.headers,
-        connectTimeout: const Duration(seconds: 10),
-        receiveTimeout: const Duration(seconds: 120),
+        connectTimeout: ConnectionTimeouts.connect,
+        receiveTimeout: ConnectionTimeouts.receive,
         validateStatus: (status) => status != null && status < 500,
         responseType: ResponseType.json,
         contentType: 'application/json; charset=utf-8',
@@ -133,16 +137,6 @@ class PlexClient {
     }
   }
 
-  /// Test connection to server
-  Future<bool> testConnection() async {
-    try {
-      final response = await _dio.get('/');
-      return response.statusCode == 200 || response.statusCode == 401;
-    } catch (e) {
-      return false;
-    }
-  }
-
   /// Test connection to a specific URL with token and measure latency
   static Future<ConnectionTestResult> testConnectionWithLatency(
     String baseUrl,
@@ -168,10 +162,29 @@ class PlexClient {
       stopwatch.stop();
       final success = response.statusCode == 200 || response.statusCode == 401;
 
-      return ConnectionTestResult(success: success, latencyMs: stopwatch.elapsedMilliseconds);
+      return ConnectionTestResult(
+        success: success,
+        latencyMs: stopwatch.elapsedMilliseconds,
+        error: success ? null : 'HTTP ${response.statusCode}',
+      );
     } catch (e) {
       stopwatch.stop();
-      return ConnectionTestResult(success: false, latencyMs: stopwatch.elapsedMilliseconds);
+      String error;
+      if (e is DioException) {
+        error = e.type == DioExceptionType.connectionTimeout
+            ? 'Connection timeout'
+            : e.type == DioExceptionType.receiveTimeout
+                ? 'Receive timeout'
+                : e.type == DioExceptionType.connectionError
+                    ? 'Connection error'
+                    : e.type.name;
+        if (e.response?.statusCode != null) {
+          error += ' (HTTP ${e.response!.statusCode})';
+        }
+      } else {
+        error = e.runtimeType.toString();
+      }
+      return ConnectionTestResult(success: false, latencyMs: stopwatch.elapsedMilliseconds, error: error);
     }
   }
 
@@ -356,7 +369,10 @@ class PlexClient {
   /// Uses cache when offline or as fallback on network error
   /// Note: OnDeck data is not relevant for offline mode
   /// Always fetches with chapters/markers but caches at base endpoint
-  Future<Map<String, dynamic>> getMetadataWithImagesAndOnDeck(String ratingKey) async {
+  ///
+  /// When [forceRefresh] is true, bypasses cache to get fresh OnDeck data.
+  /// Use this when cross-device sync is needed (e.g., after app resume).
+  Future<Map<String, dynamic>> getMetadataWithImagesAndOnDeck(String ratingKey, {bool forceRefresh = false}) async {
     // Cache key is always the base endpoint (no query params)
     final cacheKey = '/library/metadata/$ratingKey';
 
@@ -397,6 +413,7 @@ class PlexClient {
 
             return {'metadata': metadata, 'onDeckEpisode': onDeckEpisode};
           },
+          forceRefresh: forceRefresh,
         ) ??
         {'metadata': null, 'onDeckEpisode': null};
   }
@@ -429,35 +446,6 @@ class PlexClient {
     return null;
   }
 
-  /// Fetch metadata with cache support for offline mode and network fallback.
-  ///
-  /// Returns the raw response data (Map) or null if not available.
-  /// Used by playback methods to share caching logic.
-  Future<Map<String, dynamic>?> _fetchMetadataWithCache(String ratingKey, {Map<String, dynamic>? queryParams}) async {
-    final cacheKey = '/library/metadata/$ratingKey';
-
-    // Offline mode: cache only
-    if (_offlineMode) {
-      return await _cache.get(serverId, cacheKey);
-    }
-
-    // Online: try network first
-    try {
-      final response = await _dio.get('/library/metadata/$ratingKey', queryParameters: queryParams);
-
-      // Cache at base endpoint
-      if (response.data != null) {
-        await _cache.put(serverId, cacheKey, response.data);
-      }
-
-      return response.data;
-    } catch (e) {
-      // Network failed - try cache as fallback
-      appLogger.w('Network request failed for metadata, trying cache', error: e);
-      return await _cache.get(serverId, cacheKey);
-    }
-  }
-
   /// Generic cache-network-fallback helper for fetching data
   ///
   /// This method implements the standard pattern used throughout the client:
@@ -466,12 +454,17 @@ class PlexClient {
   /// 3. If network succeeds and cacheResponse is true, cache the response
   /// 4. If network fails, fall back to cached data
   /// 5. If no cached data available, rethrow the network error
+  /// Fetch data with cache fallback for offline mode and network errors.
+  ///
+  /// When [forceRefresh] is true, skips reading from cache (still writes to cache).
+  /// Use this to get fresh data when cross-device sync is needed.
   Future<T?> _fetchWithCacheFallback<T>({
     required String cacheKey,
     required Future<Response> Function() networkCall,
     required T? Function(dynamic cachedData) parseCache,
     required T? Function(Response response) parseResponse,
     bool cacheResponse = true,
+    bool forceRefresh = false,
   }) async {
     if (_offlineMode) {
       final cached = await _cache.get(serverId, cacheKey);
@@ -485,6 +478,7 @@ class PlexClient {
       }
       return parseResponse(response);
     } catch (e) {
+      // On forceRefresh, still try cache as last resort on network error
       appLogger.w('Network request failed for $cacheKey, trying cache', error: e);
       final cached = await _cache.get(serverId, cacheKey);
       if (cached != null) return parseCache(cached);
@@ -780,34 +774,18 @@ class PlexClient {
     return '${config.baseUrl}/$path'.withPlexToken(config.token);
   }
 
-  /// Get video URL for direct playback
-  /// [mediaIndex] specifies which Media item to use (defaults to 0 - first version)
-  /// Uses cache for offline mode support and network fallback.
-  Future<String?> getVideoUrl(String ratingKey, {int mediaIndex = 0}) async {
-    final data = await _fetchMetadataWithCache(ratingKey);
-    final metadataJson = _getFirstMetadataJsonFromData(data);
-
-    if (metadataJson != null && metadataJson['Media'] != null && (metadataJson['Media'] as List).isNotEmpty) {
-      final mediaList = metadataJson['Media'] as List;
-
-      // Ensure the requested index is valid
-      if (mediaIndex < 0 || mediaIndex >= mediaList.length) {
-        mediaIndex = 0;
-      }
-
-      final media = mediaList[mediaIndex];
-      if (media['Part'] != null && (media['Part'] as List).isNotEmpty) {
-        final part = media['Part'][0];
-        final partKey = part['key'] as String?;
-
-        if (partKey != null) {
-          // Return direct play URL
-          return '${config.baseUrl}$partKey'.withPlexToken(config.token);
-        }
-      }
+  /// Check whether thumbnail previews are available for a given part.
+  /// Returns true if the server responds with 200 to the first thumbnail.
+  Future<bool> checkThumbnailsAvailable(int partId) async {
+    try {
+      final response = await _dio.get(
+        '/library/parts/$partId/indexes/sd/0',
+        options: Options(responseType: ResponseType.bytes, receiveTimeout: const Duration(seconds: 5)),
+      );
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
     }
-
-    return null;
   }
 
   /// Get chapters for a media item
@@ -951,117 +929,102 @@ class PlexClient {
     return PlaybackExtras(chapters: chapters, markers: markers);
   }
 
-  /// Get detailed media info including chapters and tracks
-  /// [mediaIndex] specifies which Media item to use (defaults to 0 - first version)
-  /// Uses cache for offline mode support and network fallback.
-  Future<PlexMediaInfo?> getMediaInfo(String ratingKey, {int mediaIndex = 0}) async {
-    final data = await _fetchMetadataWithCache(ratingKey);
-    final metadataJson = _getFirstMetadataJsonFromData(data);
-
-    if (metadataJson != null && metadataJson['Media'] != null && (metadataJson['Media'] as List).isNotEmpty) {
-      final mediaList = metadataJson['Media'] as List;
-
-      // Ensure the requested index is valid
-      if (mediaIndex < 0 || mediaIndex >= mediaList.length) {
-        mediaIndex = 0;
-      }
-
-      final media = mediaList[mediaIndex];
-      if (media['Part'] != null && (media['Part'] as List).isNotEmpty) {
-        final part = media['Part'][0];
-        final partKey = part['key'] as String?;
-
-        if (partKey != null) {
-          // Parse streams using helper
-          final streams = _parseStreams(part['Stream'] as List<dynamic>?);
-          // Parse chapters using helper
-          final chapters = _parseChapters(metadataJson);
-
-          return PlexMediaInfo(
-            videoUrl: '${config.baseUrl}$partKey'.withPlexToken(config.token),
-            audioTracks: streams.audio,
-            subtitleTracks: streams.subtitles,
-            chapters: chapters,
-          );
-        }
-      }
-    }
-
-    return null;
-  }
-
-  /// Get all available media versions for a media item
-  /// Returns a list of PlexMediaVersion objects representing different quality/format options
-  /// Uses cache for offline mode support and network fallback.
-  Future<List<PlexMediaVersion>> getMediaVersions(String ratingKey) async {
-    final data = await _fetchMetadataWithCache(ratingKey);
-    final metadataJson = _getFirstMetadataJsonFromData(data);
-
-    if (metadataJson != null && metadataJson['Media'] != null && (metadataJson['Media'] as List).isNotEmpty) {
-      final mediaList = metadataJson['Media'] as List;
-      return mediaList.map((media) => PlexMediaVersion.fromJson(media as Map<String, dynamic>)).toList();
-    }
-
-    return [];
-  }
-
-  /// Get consolidated video playback data (URL, media info, and versions) in a single API call
-  /// This method combines the functionality of getVideoUrl(), getMediaInfo(), and getMediaVersions()
-  /// to reduce redundant API calls during video playback initialization.
+  /// Get consolidated video playback data (URL, media info, versions, and markers) in a single API call.
+  /// This is the primary method for playback initialization.
   /// Uses cache for offline mode support and network fallback.
   Future<PlexVideoPlaybackData> getVideoPlaybackData(String ratingKey, {int mediaIndex = 0}) async {
-    final data = await _fetchMetadataWithCache(ratingKey);
+    Map<String, dynamic>? data;
+    try {
+      data = await _fetchWithCacheFallback<Map<String, dynamic>>(
+        cacheKey: '/library/metadata/$ratingKey',
+        networkCall: () =>
+            _dio.get('/library/metadata/$ratingKey', queryParameters: {'includeMarkers': 1, 'includeChapters': 1}),
+        parseCache: (cached) => cached as Map<String, dynamic>?,
+        parseResponse: (response) => response.data as Map<String, dynamic>?,
+      );
+    } catch (_) {
+      // Gracefully degrade: return empty playback data on total failure
+    }
     final metadataJson = _getFirstMetadataJsonFromData(data);
 
     String? videoUrl;
     PlexMediaInfo? mediaInfo;
     List<PlexMediaVersion> availableVersions = [];
+    List<PlexMarker> markers = [];
 
-    if (metadataJson != null && metadataJson['Media'] != null && (metadataJson['Media'] as List).isNotEmpty) {
-      final mediaList = metadataJson['Media'] as List;
-
-      // Parse available media versions first
-      availableVersions = mediaList.map((media) => PlexMediaVersion.fromJson(media as Map<String, dynamic>)).toList();
-
-      // Ensure the requested index is valid
-      if (mediaIndex < 0 || mediaIndex >= mediaList.length) {
-        mediaIndex = 0;
+    if (metadataJson != null) {
+      // Parse markers (for auto-skip functionality)
+      if (metadataJson['Marker'] != null) {
+        final markerList = metadataJson['Marker'] as List;
+        for (var marker in markerList) {
+          markers.add(
+            PlexMarker(
+              id: marker['id'] as int,
+              type: marker['type'] as String,
+              startTimeOffset: marker['startTimeOffset'] as int,
+              endTimeOffset: marker['endTimeOffset'] as int,
+            ),
+          );
+        }
       }
 
-      final media = mediaList[mediaIndex];
-      if (media['Part'] != null && (media['Part'] as List).isNotEmpty) {
-        final part = media['Part'][0];
-        final partKey = part['key'] as String?;
+      if (metadataJson['Media'] != null && (metadataJson['Media'] as List).isNotEmpty) {
+        final mediaList = metadataJson['Media'] as List;
 
-        if (partKey != null) {
-          // Get video URL
-          videoUrl = '${config.baseUrl}$partKey'.withPlexToken(config.token);
+        // Parse available media versions first
+        availableVersions = mediaList.map((media) => PlexMediaVersion.fromJson(media as Map<String, dynamic>)).toList();
 
-          // Parse streams using helper
-          final streams = _parseStreams(part['Stream'] as List<dynamic>?);
-          // Parse chapters using helper
-          final chapters = _parseChapters(metadataJson);
+        // Ensure the requested index is valid
+        if (mediaIndex < 0 || mediaIndex >= mediaList.length) {
+          mediaIndex = 0;
+        }
 
-          // Create media info
-          mediaInfo = PlexMediaInfo(
-            videoUrl: videoUrl,
-            audioTracks: streams.audio,
-            subtitleTracks: streams.subtitles,
-            chapters: chapters,
-            partId: part['id'] as int?,
-          );
+        final media = mediaList[mediaIndex];
+        if (media['Part'] != null && (media['Part'] as List).isNotEmpty) {
+          final part = media['Part'][0];
+          final partKey = part['key'] as String?;
+
+          if (partKey != null) {
+            // Get video URL
+            videoUrl = '${config.baseUrl}$partKey'.withPlexToken(config.token);
+
+            // Parse streams using helper
+            final streams = _parseStreams(part['Stream'] as List<dynamic>?);
+            // Parse chapters using helper
+            final chapters = _parseChapters(metadataJson);
+
+            // Create media info
+            mediaInfo = PlexMediaInfo(
+              videoUrl: videoUrl,
+              audioTracks: streams.audio,
+              subtitleTracks: streams.subtitles,
+              chapters: chapters,
+              partId: part['id'] as int?,
+            );
+          }
         }
       }
     }
 
-    return PlexVideoPlaybackData(videoUrl: videoUrl, mediaInfo: mediaInfo, availableVersions: availableVersions);
+    return PlexVideoPlaybackData(
+      videoUrl: videoUrl,
+      mediaInfo: mediaInfo,
+      availableVersions: availableVersions,
+      markers: markers,
+    );
   }
 
   /// Get file information for a media item
   /// Uses cache for offline mode support and network fallback.
   Future<PlexFileInfo?> getFileInfo(String ratingKey) async {
     try {
-      final data = await _fetchMetadataWithCache(ratingKey);
+      final data = await _fetchWithCacheFallback<Map<String, dynamic>>(
+        cacheKey: '/library/metadata/$ratingKey',
+        networkCall: () =>
+            _dio.get('/library/metadata/$ratingKey', queryParameters: {'includeMarkers': 1, 'includeChapters': 1}),
+        parseCache: (cached) => cached as Map<String, dynamic>?,
+        parseResponse: (response) => response.data as Map<String, dynamic>?,
+      );
       final metadataJson = _getFirstMetadataJsonFromData(data);
 
       if (metadataJson != null && metadataJson['Media'] != null && (metadataJson['Media'] as List).isNotEmpty) {
@@ -1123,13 +1086,23 @@ class PlexClient {
   }
 
   /// Mark media as watched
-  Future<void> markAsWatched(String ratingKey) async {
+  ///
+  /// If [metadata] is provided, emits a [WatchStateEvent] for UI updates.
+  Future<void> markAsWatched(String ratingKey, {PlexMetadata? metadata}) async {
     await _dio.get('/:/scrobble', queryParameters: {'key': ratingKey, 'identifier': 'com.plexapp.plugins.library'});
+    if (metadata != null) {
+      WatchStateNotifier().notifyWatched(metadata: metadata, isNowWatched: true);
+    }
   }
 
   /// Mark media as unwatched
-  Future<void> markAsUnwatched(String ratingKey) async {
+  ///
+  /// If [metadata] is provided, emits a [WatchStateEvent] for UI updates.
+  Future<void> markAsUnwatched(String ratingKey, {PlexMetadata? metadata}) async {
     await _dio.get('/:/unscrobble', queryParameters: {'key': ratingKey, 'identifier': 'com.plexapp.plugins.library'});
+    if (metadata != null) {
+      WatchStateNotifier().notifyWatched(metadata: metadata, isNowWatched: false);
+    }
   }
 
   /// Update playback progress
@@ -1157,6 +1130,13 @@ class PlexClient {
     await _dio.put('/actions/removeFromContinueWatching', queryParameters: {'ratingKey': ratingKey});
   }
 
+  /// Delete a media item from the library
+  /// This permanently removes the item and its associated files from the server
+  /// Returns true if deletion was successful, false otherwise
+  Future<bool> deleteMediaItem(String ratingKey) async {
+    return _wrapBoolApiCall(() => _dio.delete('/library/metadata/$ratingKey'), 'Failed to delete media item');
+  }
+
   /// Get server preferences
   Future<Map<String, dynamic>> getServerPreferences() async {
     final response = await _dio.get('/:/prefs');
@@ -1177,6 +1157,20 @@ class PlexClient {
   Future<List<PlexFilter>> getLibraryFilters(String sectionId) async {
     final response = await _dio.get('/library/sections/$sectionId/filters');
     return _extractDirectoryList(response, PlexFilter.fromJson);
+  }
+
+  /// Get first characters (alphabet index) for a library section
+  Future<List<PlexFirstCharacter>> getFirstCharacters(
+    String sectionId, {
+    int? type,
+    Map<String, String>? filters,
+  }) async {
+    final queryParams = <String, dynamic>{};
+    if (type != null) queryParams['type'] = type;
+    if (filters != null) queryParams.addAll(filters);
+
+    final response = await _dio.get('/library/sections/$sectionId/firstCharacter', queryParameters: queryParams);
+    return _extractDirectoryList(response, PlexFirstCharacter.fromJson);
   }
 
   /// Get filter values (e.g., list of genres, years, etc.)
@@ -1261,11 +1255,9 @@ class PlexClient {
             final hub = PlexHub.fromJson(hubJson);
             // Only include hubs that have items and are movie/show content
             if (hub.items.isNotEmpty) {
-              // Filter out non-video content types and tag with server info
+              // Filter to only video content (movies, shows, seasons, episodes) and tag with server info
               final videoItems = hub.items
-                  .where((item) {
-                    return item.isMovie || item.isShow;
-                  })
+                  .where((item) => item.isVideoContent)
                   .map((item) => item.copyWith(serverId: serverId, serverName: serverName))
                   .toList();
 
@@ -1297,14 +1289,62 @@ class PlexClient {
     return [];
   }
 
+  /// Get global hubs (home page recommendations)
+  /// Returns actual home page hubs like "Recently Added Movies", "Recently Added TV", etc.
+  /// This matches the official Plex client's home page layout.
+  Future<List<PlexHub>> getGlobalHubs({int limit = 10}) async {
+    try {
+      final response = await _dio.get('/hubs', queryParameters: {'count': limit, 'includeGuids': 1});
+
+      final container = _getMediaContainer(response);
+      if (container != null && container['Hub'] != null) {
+        final hubs = <PlexHub>[];
+        for (final hubJson in container['Hub'] as List) {
+          try {
+            final hub = PlexHub.fromJson(hubJson);
+            if (hub.items.isEmpty) continue;
+
+            // Filter to only video content (movies, shows, seasons, episodes) and tag with server info
+            final videoItems = hub.items
+                .where((item) => item.isVideoContent)
+                .map((item) => item.copyWith(serverId: serverId, serverName: serverName))
+                .toList();
+
+            if (videoItems.isNotEmpty) {
+              hubs.add(
+                PlexHub(
+                  hubKey: hub.hubKey,
+                  title: hub.title,
+                  type: hub.type,
+                  hubIdentifier: hub.hubIdentifier,
+                  size: hub.size,
+                  more: hub.more,
+                  items: videoItems,
+                  serverId: serverId,
+                  serverName: serverName,
+                ),
+              );
+            }
+          } catch (e) {
+            appLogger.w('Failed to parse global hub', error: e);
+          }
+        }
+        return hubs;
+      }
+    } catch (e) {
+      appLogger.e('Failed to get global hubs: $e');
+    }
+    return [];
+  }
+
   /// Get full content from a hub using its hub key
   /// Returns the complete list of metadata items in the hub
   Future<List<PlexMetadata>> getHubContent(String hubKey) async {
     return _wrapListApiCall<PlexMetadata>(() => _dio.get(hubKey), (response) {
       final allItems = _extractMetadataList(response);
-      // Filter out non-video content types
+      // Filter to only video content (movies, shows, seasons, episodes)
       return allItems.where((item) {
-        return item.isMovie || item.isShow;
+        return item.isVideoContent;
       }).toList();
     }, 'Failed to get hub content');
   }

@@ -7,6 +7,7 @@ import '../../../mixins/item_updatable.dart';
 import '../../../models/plex_hub.dart';
 import '../../../models/plex_metadata.dart';
 import '../../../widgets/hub_section.dart';
+import '../../main_screen.dart';
 import 'base_library_tab.dart';
 
 /// Recommended tab for library screen
@@ -115,8 +116,13 @@ class _LibraryRecommendedTabState extends BaseLibraryTabState<PlexHub, LibraryRe
     final targetIndex = isUp ? hubIndex - 1 : hubIndex + 1;
 
     // Check if target is valid
-    if (targetIndex < 0 || targetIndex >= _hubKeys.length) {
-      // At boundary, block navigation
+    if (targetIndex < 0) {
+      // At top boundary - return false to allow onNavigateUp to handle it
+      return false;
+    }
+
+    if (targetIndex >= _hubKeys.length) {
+      // At bottom boundary, block navigation
       return true;
     }
 
@@ -138,12 +144,22 @@ class _LibraryRecommendedTabState extends BaseLibraryTabState<PlexHub, LibraryRe
     }
   }
 
+  /// Navigate focus to the sidebar
+  void _navigateToSidebar() {
+    MainScreenFocusScope.of(context)?.focusSidebar();
+  }
+
+  // Extra top padding for focus decoration (scale + border extends beyond item bounds)
+  static const double _focusDecorationPadding = 8.0;
+
   @override
   Widget buildContent(List<PlexHub> items) {
     _ensureHubKeys(items.length);
 
     return ListView.builder(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.fromLTRB(0, 8 + _focusDecorationPadding, 0, 8),
+      // Allow focus decoration to render outside scroll bounds
+      clipBehavior: Clip.none,
       itemCount: items.length,
       itemBuilder: (context, index) {
         final hub = items[index];
@@ -158,6 +174,8 @@ class _LibraryRecommendedTabState extends BaseLibraryTabState<PlexHub, LibraryRe
           onRemoveFromContinueWatching: isContinueWatching ? _refreshContinueWatching : null,
           onVerticalNavigation: (isUp) => _handleVerticalNavigation(index, isUp),
           onBack: widget.onBack,
+          onNavigateUp: index == 0 ? widget.onBack : null,
+          onNavigateToSidebar: _navigateToSidebar,
         );
       },
     );

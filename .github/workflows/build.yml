@@ -1,4 +1,4 @@
-name: Build Flutter App
+name: Build
 
 on:
   workflow_dispatch:
@@ -57,27 +57,35 @@ jobs:
           storeFile=upload-keystore.jks
           EOF
 
-      - name: Build APK
-        run: flutter build apk --release --dart-define=ENABLE_UPDATE_CHECK=true
+      - name: Build APKs
+        run: flutter build apk --release --split-per-abi --dart-define=ENABLE_UPDATE_CHECK=true
 
       - name: Clean up keystore
         if: always()
         run: rm -f android/app/upload-keystore.jks android/key.properties
 
-      - name: Rename APK
+      - name: Package APKs
         run: |
-          cp build/app/outputs/flutter-apk/app-release.apk plezy-android.apk
+          tar -czf plezy-android-arm64-v8a.tar.gz -C build/app/outputs/flutter-apk app-arm64-v8a-release.apk --transform 's/app-arm64-v8a-release.apk/plezy.apk/'
+          tar -czf plezy-android-armeabi-v7a.tar.gz -C build/app/outputs/flutter-apk app-armeabi-v7a-release.apk --transform 's/app-armeabi-v7a-release.apk/plezy.apk/'
+          tar -czf plezy-android-x86_64.tar.gz -C build/app/outputs/flutter-apk app-x86_64-release.apk --transform 's/app-x86_64-release.apk/plezy.apk/'
 
-      - name: Attest APK
+      - name: Attest APKs
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: plezy-android.apk
+          subject-path: |
+            plezy-android-arm64-v8a.tar.gz
+            plezy-android-armeabi-v7a.tar.gz
+            plezy-android-x86_64.tar.gz
 
-      - name: Upload APK
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: plezy-android.apk
+          path: |
+            plezy-android-arm64-v8a.tar.gz
+            plezy-android-armeabi-v7a.tar.gz
+            plezy-android-x86_64.tar.gz
 
   build-ios:
     runs-on: macos-26
@@ -207,7 +215,7 @@ jobs:
           IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | grep -o '".*"' | tr -d '"')
           echo "Signing with identity: $IDENTITY"
 
-          APP_PATH="build/macos/Build/Products/Release/plezy.app"
+          APP_PATH="build/macos/Build/Products/Release/Plezy.app"
 
           # Sign all frameworks and dylibs first (inside-out signing)
           find "$APP_PATH/Contents/Frameworks" -name "*.framework" -o -name "*.dylib" | while read framework; do
@@ -221,7 +229,7 @@ jobs:
 
       - name: Verify Signature
         run: |
-          APP_PATH="build/macos/Build/Products/Release/plezy.app"
+          APP_PATH="build/macos/Build/Products/Release/Plezy.app"
           echo "Verifying signature..."
           codesign -dvvv "$APP_PATH"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
@@ -232,7 +240,7 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          APP_PATH="build/macos/Build/Products/Release/plezy.app"
+          APP_PATH="build/macos/Build/Products/Release/Plezy.app"
 
           # Create a temporary ZIP for notarization submission
           echo "Creating ZIP for notarization..."
@@ -254,27 +262,27 @@ jobs:
           echo "Verifying notarization..."
           xcrun stapler validate "$APP_PATH"
 
-      - name: Create ZIP
+      - name: Create DMG
         run: |
-          cd build/macos/Build/Products/Release
-          ditto -c -k --sequesterRsrc --keepParent plezy.app $GITHUB_WORKSPACE/plezy-macos.zip
+          mkdir -p dmg-staging
+          cp -R build/macos/Build/Products/Release/Plezy.app dmg-staging/
+          ln -s /Applications dmg-staging/Applications
+          hdiutil create -format ULMO -srcfolder dmg-staging -volname "Plezy" plezy-macos.dmg
 
-      - name: Attest macOS ZIP
+      - name: Attest macOS DMG
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: plezy-macos.zip
+          subject-path: plezy-macos.dmg
 
-      - name: Upload macOS ZIP
+      - name: Upload macOS DMG
         uses: actions/upload-artifact@v4
         with:
-          name: macos-zip
-          path: plezy-macos.zip
+          name: macos-dmg
+          path: plezy-macos.dmg
 
-  build-windows:
+  build-windows-x64:
     runs-on: windows-latest
     permissions:
-      id-token: write
-      attestations: write
       contents: read
     steps:
       - uses: actions/checkout@v4
@@ -297,26 +305,98 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build Windows
+      - name: Build Windows x64
         run: flutter build windows --release --dart-define=ENABLE_UPDATE_CHECK=true
 
-      - name: Build Windows Installer
-        run: .\windows\build-installer.ps1
+      - name: Upload x64 build
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-build
+          path: build/windows/x64/runner/Release/
+
+  build-windows-arm64:
+    runs-on: windows-11-arm
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install 7-Zip
+        run: choco install 7zip -y
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "master"
+          cache: true
+
+      - name: Cache Pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\Pub\Cache
+          key: ${{ runner.os }}-arm64-pub-${{ hashFiles('**/pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-arm64-pub-
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Windows arm64
+        run: flutter build windows --release --dart-define=ENABLE_UPDATE_CHECK=true
+
+      - name: Upload arm64 build
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-arm64-build
+          path: build/windows/arm64/runner/Release/
+
+  package-windows:
+    needs: [build-windows-x64, build-windows-arm64]
+    runs-on: windows-latest
+    permissions:
+      id-token: write
+      attestations: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download x64 build
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x64-build
+          path: build-x64
+
+      - name: Download arm64 build
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-arm64-build
+          path: build-arm64
+
+      - name: Build installer and portables
+        run: .\windows\build-installer.ps1 -X64BuildDir "build-x64" -Arm64BuildDir "build-arm64"
 
       - name: Attest Windows artifacts
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
-            plezy-windows-portable.zip
+            plezy-windows-x64-portable.7z
+            plezy-windows-arm64-portable.7z
             plezy-windows-installer.exe
 
-      - name: Upload Portable Archive
+      - name: Upload x64 portable
         uses: actions/upload-artifact@v4
         with:
-          name: windows-portable
-          path: plezy-windows-portable.zip
+          name: windows-x64-portable
+          path: plezy-windows-x64-portable.7z
 
-      - name: Upload Installer
+      - name: Upload arm64 portable
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-arm64-portable
+          path: plezy-windows-arm64-portable.7z
+
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
@@ -349,13 +429,16 @@ jobs:
       - name: Cache APT packages
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
-          packages: clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev libmpv-dev mpv keybinder-3.0
-          version: 1.0
+          packages: clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev libmpv-dev mpv ruby ruby-dev rubygems build-essential rpm libarchive-tools imagemagick
+          version: 1.1
 
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev libmpv-dev mpv keybinder-3.0
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev libmpv-dev mpv ruby ruby-dev rubygems build-essential rpm libarchive-tools imagemagick
+
+      - name: Install fpm
+        run: sudo gem install fpm
 
       - name: Install dependencies
         run: flutter pub get
@@ -368,10 +451,17 @@ jobs:
           cd build/linux/x64/release/bundle
           tar -czf $GITHUB_WORKSPACE/plezy-linux.tar.gz *
 
-      - name: Attest Linux tarball
+      - name: Build Linux Packages
+        run: OUTPUT_DIR=$GITHUB_WORKSPACE python3 linux/packaging/build-packages.py
+
+      - name: Attest Linux artifacts
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: plezy-linux.tar.gz
+          subject-path: |
+            plezy-linux.tar.gz
+            plezy-linux.deb
+            plezy-linux.rpm
+            plezy-linux.pkg.tar.zst
 
       - name: Upload Linux App
         uses: actions/upload-artifact@v4
@@ -379,15 +469,17 @@ jobs:
           name: linux-app
           path: plezy-linux.tar.gz
 
+      - name: Upload Linux Packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            plezy-linux.deb
+            plezy-linux.rpm
+            plezy-linux.pkg.tar.zst
+
   create-release:
-    needs:
-      [
-        build-android,
-        build-ios,
-        build-macos,
-        build-windows,
-        build-linux,
-      ]
+    needs: [build-android, build-ios, build-macos, package-windows, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -404,12 +496,16 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/android-apk/plezy-android.apk
+            artifacts/android-apk/plezy-android-arm64-v8a.tar.gz
+            artifacts/android-apk/plezy-android-armeabi-v7a.tar.gz
+            artifacts/android-apk/plezy-android-x86_64.tar.gz
             artifacts/ios-ipa/plezy-ios.ipa
-            artifacts/macos-zip/plezy-macos.zip
-            artifacts/windows-portable/plezy-windows-portable.zip
+            artifacts/macos-dmg/plezy-macos.dmg
+            artifacts/windows-x64-portable/plezy-windows-x64-portable.7z
+            artifacts/windows-arm64-portable/plezy-windows-arm64-portable.7z
             artifacts/windows-installer/plezy-windows-installer.exe
             artifacts/linux-app/plezy-linux.tar.gz
+            artifacts/linux-packages/*
           draft: true
           prerelease: false
           generate_release_notes: true

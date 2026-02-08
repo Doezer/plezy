@@ -1,5 +1,7 @@
 import 'dart:math';
+import 'package:flutter/widgets.dart';
 import '../services/plex_client.dart';
+import 'plex_url_helper.dart';
 
 /// Image types for different transcoding strategies
 enum ImageType {
@@ -29,6 +31,21 @@ class PlexImageHelper {
       roundedWidth.clamp(_minTranscodedWidth, _maxTranscodedWidth),
       roundedHeight.clamp(_minTranscodedHeight, _maxTranscodedHeight),
     );
+  }
+
+  /// Computes an effective device pixel ratio that accounts for displays where
+  /// the platform-reported DPR doesn't reflect the true physical density
+  /// (common on Linux X11 with compositor scaling).
+  static double effectiveDevicePixelRatio(BuildContext context) {
+    final reportedDpr = MediaQuery.of(context).devicePixelRatio;
+    try {
+      final displayWidth = View.of(context).display.size.width;
+      // Scale quality with display resolution: 1920px = baseline (1.0x)
+      final displayBasedDpr = (displayWidth / 1920).clamp(1.0, 3.0);
+      return max(reportedDpr, displayBasedDpr);
+    } catch (_) {
+      return reportedDpr;
+    }
   }
 
   /// Calculates optimal image dimensions based on image type and constraints
@@ -73,9 +90,9 @@ class PlexImageHelper {
         return roundDimensions(size, size);
 
       case ImageType.poster:
-        // For posters, maintain 2:3 aspect ratio
-        final calculatedWidth = min(targetWidth, targetHeight / (2 / 3));
-        final calculatedHeight = calculatedWidth * (2 / 3);
+        // For posters, maintain 2:3 aspect ratio (width:height)
+        final calculatedWidth = min(targetWidth, targetHeight * (2 / 3));
+        final calculatedHeight = calculatedWidth * (3 / 2);
         return roundDimensions(calculatedWidth, calculatedHeight);
     }
   }
@@ -91,9 +108,7 @@ class PlexImageHelper {
     final token = client.config.token;
 
     // URL encode the original path with token
-    final encodedPath = Uri.encodeComponent(
-      '$originalPath${originalPath.contains('?') ? '&' : '?'}X-Plex-Token=$token',
-    );
+    final encodedPath = Uri.encodeComponent(originalPath.withPlexToken(token));
 
     // Build the transcode URL
     final transcodeParams = {
@@ -139,12 +154,6 @@ class PlexImageHelper {
       return '';
     }
 
-    // For art/backgrounds and clear logos, prefer the original image to avoid
-    // any aspect ratio changes from Plex photo transcoding.
-    if (imageType == ImageType.art || imageType == ImageType.logo) {
-      return client.getThumbnailUrl(basePath);
-    }
-
     final canTranscode = enableTranscoding && shouldTranscode(basePath);
 
     // If marked non-transcodable or transcoding disabled, use the direct thumbnail URL.
@@ -165,21 +174,13 @@ class PlexImageHelper {
       imageType: imageType,
     );
 
-    // For art and logos we only constrain width to preserve native aspect.
-    final useWidthOnly = imageType == ImageType.art || imageType == ImageType.logo;
-
     // For dimensions close to minimum, use original to avoid unnecessary processing
     if (width <= _minTranscodedWidth * 1.2 && height <= _minTranscodedHeight * 1.2) {
       return client.getThumbnailUrl(basePath);
     }
 
     try {
-      return buildTranscodeUrl(
-        client: client,
-        originalPath: basePath,
-        width: width,
-        height: useWidthOnly ? null : height,
-      );
+      return buildTranscodeUrl(client: client, originalPath: basePath, width: width, height: height);
     } catch (e) {
       // Fallback to original URL on any error
       return client.getThumbnailUrl(basePath);

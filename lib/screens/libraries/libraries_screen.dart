@@ -5,13 +5,16 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:dio/dio.dart';
 import '../../focus/dpad_navigator.dart';
+import '../../focus/focus_theme.dart';
 import '../../focus/input_mode_tracker.dart';
-import '../../services/gamepad_service.dart';
+import '../../focus/key_event_utils.dart';
+import '../../mixins/tab_navigation_mixin.dart';
 import '../../../services/plex_client.dart';
 import '../../models/plex_library.dart';
 import '../../models/plex_metadata.dart';
 import '../../models/plex_sort.dart';
 import '../../providers/hidden_libraries_provider.dart';
+import '../../providers/libraries_provider.dart';
 import '../../providers/multi_server_provider.dart';
 import '../../utils/app_logger.dart';
 import '../../utils/platform_detector.dart';
@@ -20,7 +23,6 @@ import '../../utils/snackbar_helper.dart';
 import '../../utils/content_utils.dart';
 import '../../widgets/desktop_app_bar.dart';
 import '../../widgets/focusable_tab_chip.dart';
-import '../main_screen.dart';
 import '../../services/storage_service.dart';
 import '../../mixins/refreshable.dart';
 import '../../mixins/item_updatable.dart';
@@ -63,7 +65,14 @@ class LibrariesScreen extends StatefulWidget {
 }
 
 class _LibrariesScreenState extends State<LibrariesScreen>
-    with Refreshable, FullRefreshable, FocusableTab, LibraryLoadable, ItemUpdatable, SingleTickerProviderStateMixin {
+    with
+        Refreshable,
+        FullRefreshable,
+        FocusableTab,
+        LibraryLoadable,
+        ItemUpdatable,
+        SingleTickerProviderStateMixin,
+        TabNavigationMixin {
   @override
   PlexClient get client {
     final multiServerProvider = Provider.of<MultiServerProvider>(context, listen: false);
@@ -73,22 +82,15 @@ class _LibrariesScreenState extends State<LibrariesScreen>
     return context.getClientForServer(multiServerProvider.onlineServerIds.first);
   }
 
-  late TabController _tabController;
-
   // GlobalKeys for tabs to enable refresh
   final _recommendedTabKey = GlobalKey<State<LibraryRecommendedTab>>();
   final _browseTabKey = GlobalKey<State<LibraryBrowseTab>>();
   final _collectionsTabKey = GlobalKey<State<LibraryCollectionsTab>>();
   final _playlistsTabKey = GlobalKey<State<LibraryPlaylistsTab>>();
 
-  List<PlexLibrary> _allLibraries = []; // All libraries from API (unfiltered)
-  bool _isLoadingLibraries = true;
   String? _errorMessage;
   String? _selectedLibraryGlobalKey;
   bool _isInitialLoad = true;
-
-  /// When true, suppress auto-focus in tabs (used when navigating via tab bar)
-  bool _suppressAutoFocus = false;
 
   Map<String, String> _selectedFilters = {};
   PlexSort? _selectedSort;
@@ -100,7 +102,7 @@ class _LibrariesScreenState extends State<LibrariesScreen>
   int _requestId = 0;
   static const int _pageSize = 1000;
 
-  /// Flag to prevent _onTabChanged from focusing when we're programmatically changing tabs
+  /// Flag to prevent onTabChanged from focusing when we're programmatically changing tabs
   bool _isRestoringTab = false;
 
   /// Track which tabs have loaded data (used to trigger focus after tab restore)
@@ -116,83 +118,125 @@ class _LibrariesScreenState extends State<LibrariesScreen>
   final _playlistsTabChipFocusNode = FocusNode(debugLabel: 'tab_chip_playlists');
 
   @override
+  List<FocusNode> get tabChipFocusNodes => [
+    _recommendedTabChipFocusNode,
+    _browseTabChipFocusNode,
+    _collectionsTabChipFocusNode,
+    _playlistsTabChipFocusNode,
+  ];
+
+  // App bar action button focus
+  late FocusNode _editButtonFocusNode;
+  late FocusNode _refreshButtonFocusNode;
+  bool _isEditFocused = false;
+  bool _isRefreshFocused = false;
+
+  // Scroll controller for the outer CustomScrollView
+  final ScrollController _outerScrollController = ScrollController();
+
+  @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
-    _tabController.addListener(_onTabChanged);
-    _loadLibraries();
+    initTabNavigation();
 
-    // Register L1/R1 callbacks for tab navigation
-    GamepadService.onL1Pressed = _goToPreviousTab;
-    GamepadService.onR1Pressed = _goToNextTab;
+    // Initialize action button focus nodes
+    _editButtonFocusNode = FocusNode(debugLabel: 'EditButton');
+    _refreshButtonFocusNode = FocusNode(debugLabel: 'RefreshButton');
+    _editButtonFocusNode.addListener(_onEditFocusChange);
+    _refreshButtonFocusNode.addListener(_onRefreshFocusChange);
+
+    // Initialize with libraries from the provider
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeWithLibraries();
+    });
   }
 
-  void _goToPreviousTab() {
-    if (_tabController.index > 0) {
-      setState(() {
-        _suppressAutoFocus = true;
-        _tabController.index = _tabController.index - 1;
-      });
-      _getTabChipFocusNode(_tabController.index).requestFocus();
+  /// Initialize the screen with libraries from the provider.
+  /// This handles initial library selection and content loading.
+  Future<void> _initializeWithLibraries() async {
+    final librariesProvider = context.read<LibrariesProvider>();
+    final hiddenLibrariesProvider = context.read<HiddenLibrariesProvider>();
+    final allLibraries = librariesProvider.libraries;
+
+    if (allLibraries.isEmpty) {
+      // No libraries available yet
+      return;
+    }
+
+    // Compute visible libraries for initial load
+    final hiddenKeys = hiddenLibrariesProvider.hiddenLibraryKeys;
+    final visibleLibraries = allLibraries.where((lib) => !hiddenKeys.contains(lib.globalKey)).toList();
+
+    // Load saved preferences
+    final storage = await StorageService.getInstance();
+    final savedLibraryKey = storage.getSelectedLibraryKey();
+
+    // Find the library by key in visible libraries
+    String? libraryGlobalKeyToLoad;
+    if (savedLibraryKey != null) {
+      // Check if saved library exists and is visible
+      final libraryExists = visibleLibraries.any((lib) => lib.globalKey == savedLibraryKey);
+      if (libraryExists) {
+        libraryGlobalKeyToLoad = savedLibraryKey;
+      }
+    }
+
+    // Fallback to first visible library if saved key not found
+    if (libraryGlobalKeyToLoad == null && visibleLibraries.isNotEmpty) {
+      libraryGlobalKeyToLoad = visibleLibraries.first.globalKey;
+    }
+
+    if (libraryGlobalKeyToLoad != null && mounted) {
+      final savedFilters = storage.getLibraryFilters(sectionId: libraryGlobalKeyToLoad);
+      if (savedFilters.isNotEmpty) {
+        _selectedFilters = Map.from(savedFilters);
+      }
+      _loadLibraryContent(libraryGlobalKeyToLoad);
     }
   }
 
-  void _goToNextTab() {
-    if (_tabController.index < _tabController.length - 1) {
-      setState(() {
-        _suppressAutoFocus = true;
-        _tabController.index = _tabController.index + 1;
-      });
-      _getTabChipFocusNode(_tabController.index).requestFocus();
-    }
-  }
-
-  void _onTabChanged() {
+  @override
+  void onTabChanged() {
     // Save tab index when changed (but not when restoring from storage)
-    if (_selectedLibraryGlobalKey != null && !_tabController.indexIsChanging) {
+    if (_selectedLibraryGlobalKey != null && !tabController.indexIsChanging) {
       // Only save if this was a user-initiated tab change, not a restore
       if (!_isRestoringTab) {
         StorageService.getInstance().then((storage) {
-          storage.saveLibraryTab(_selectedLibraryGlobalKey!, _tabController.index);
+          storage.saveLibraryTab(_selectedLibraryGlobalKey!, tabController.index);
         });
 
         // Focus first item in the current tab (only for user-initiated changes)
         // But not when navigating via tab bar (suppressAutoFocus is true)
-        if (!_suppressAutoFocus) {
+        if (!suppressAutoFocus) {
           _focusCurrentTab();
         }
       }
     }
     // Rebuild to update chip selection state
-    setState(() {});
+    super.onTabChanged();
   }
 
-  /// Focus the first item in the currently active tab
+  /// Focus the first item in the currently active tab.
+  /// Used for initial load and tab switching - focuses the grid content directly.
   void _focusCurrentTab() {
+    // Don't focus during tab animations - wait for animation to complete
+    // This prevents race conditions during focus restoration
+    if (tabController.indexIsChanging) {
+      return;
+    }
+
     // Re-enable auto-focus since user is navigating into tab content
-    setState(() {
-      _suppressAutoFocus = false;
-    });
+    // Only call setState if the value actually changes to avoid unnecessary rebuilds
+    if (suppressAutoFocus) {
+      setState(() {
+        suppressAutoFocus = false;
+      });
+    }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
 
-      State? tabState;
-      switch (_tabController.index) {
-        case 0:
-          tabState = _recommendedTabKey.currentState;
-          break;
-        case 1:
-          tabState = _browseTabKey.currentState;
-          break;
-        case 2:
-          tabState = _collectionsTabKey.currentState;
-          break;
-        case 3:
-          tabState = _playlistsTabKey.currentState;
-          break;
-      }
-
+      final tabState = _getTabState(tabController.index);
       if (tabState != null) {
         (tabState as dynamic).focusFirstItem();
       } else {
@@ -207,24 +251,59 @@ class _LibrariesScreenState extends State<LibrariesScreen>
 
   /// Focus without additional frame delay (used for retry)
   void _focusCurrentTabImmediate() {
-    State? tabState;
-    switch (_tabController.index) {
-      case 0:
-        tabState = _recommendedTabKey.currentState;
-        break;
-      case 1:
-        tabState = _browseTabKey.currentState;
-        break;
-      case 2:
-        tabState = _collectionsTabKey.currentState;
-        break;
-      case 3:
-        tabState = _playlistsTabKey.currentState;
-        break;
-    }
-
+    final tabState = _getTabState(tabController.index);
     if (tabState != null) {
       (tabState as dynamic).focusFirstItem();
+    }
+  }
+
+  /// Focus tab content when navigating DOWN from the tab bar.
+  /// For browse tab, this focuses the chips bar first so DOWN navigates to grid.
+  /// For other tabs, focuses the first item directly.
+  void _focusCurrentTabFromTabBar() {
+    if (tabController.indexIsChanging) {
+      return;
+    }
+
+    if (suppressAutoFocus) {
+      setState(() {
+        suppressAutoFocus = false;
+      });
+    }
+
+    // Scroll outer view to top to ensure tab content (including chips bar) is visible
+    if (_outerScrollController.hasClients && _outerScrollController.offset > 0) {
+      _outerScrollController.jumpTo(0);
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      final tabState = _getTabState(tabController.index);
+      if (tabState != null) {
+        // Browse tab has a chips bar - focus that first so DOWN navigates to grid
+        if (tabController.index == 1) {
+          (tabState as dynamic).focusChipsBar();
+        } else {
+          (tabState as dynamic).focusFirstItem();
+        }
+      }
+    });
+  }
+
+  /// Get the state for a tab by index
+  State? _getTabState(int index) {
+    switch (index) {
+      case 0:
+        return _recommendedTabKey.currentState;
+      case 1:
+        return _browseTabKey.currentState;
+      case 2:
+        return _collectionsTabKey.currentState;
+      case 3:
+        return _playlistsTabKey.currentState;
+      default:
+        return null;
     }
   }
 
@@ -234,13 +313,13 @@ class _LibrariesScreenState extends State<LibrariesScreen>
     _loadedTabs.add(tabIndex);
 
     // Don't auto-focus if suppressed (e.g., when navigating via tab bar)
-    if (_suppressAutoFocus) return;
+    if (suppressAutoFocus) return;
 
     // Only focus if this is the currently active tab
-    if (_tabController.index == tabIndex && mounted) {
+    if (tabController.index == tabIndex && mounted) {
       // Use post-frame callback to ensure the widget tree is fully built
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _tabController.index == tabIndex && !_suppressAutoFocus) {
+        if (mounted && tabController.index == tabIndex && !suppressAutoFocus) {
           _focusCurrentTab();
         }
       });
@@ -257,50 +336,88 @@ class _LibrariesScreenState extends State<LibrariesScreen>
     _focusCurrentTab();
   }
 
-  /// Focus the currently selected tab chip in the tab bar.
-  /// Called when BACK is pressed in tab content.
-  void focusTabBar() {
-    setState(() {
-      _suppressAutoFocus = true;
-    });
-    final focusNode = _getTabChipFocusNode(_tabController.index);
-    focusNode.requestFocus();
-  }
-
-  /// Get the focus node for a tab chip by index
-  FocusNode _getTabChipFocusNode(int index) {
-    switch (index) {
-      case 0:
-        return _recommendedTabChipFocusNode;
-      case 1:
-        return _browseTabChipFocusNode;
-      case 2:
-        return _collectionsTabChipFocusNode;
-      case 3:
-        return _playlistsTabChipFocusNode;
-      default:
-        return _recommendedTabChipFocusNode;
+  void _onEditFocusChange() {
+    if (mounted) {
+      setState(() => _isEditFocused = _editButtonFocusNode.hasFocus);
     }
   }
 
-  /// Handle BACK from tab bar - navigate to sidenav
-  void _onTabBarBack() {
-    final focusScope = MainScreenFocusScope.of(context);
-    focusScope?.focusSidebar();
+  void _onRefreshFocusChange() {
+    if (mounted) {
+      setState(() => _isRefreshFocused = _refreshButtonFocusNode.hasFocus);
+    }
+  }
+
+  /// Handle key events for the edit button in app bar
+  KeyEventResult _handleEditKeyEvent(FocusNode node, KeyEvent event) {
+    if (!event.isActionable) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+
+    if (key.isLeftKey) {
+      // Navigate back to last tab (Playlists)
+      getTabChipFocusNode(3).requestFocus();
+      return KeyEventResult.handled;
+    }
+    if (key.isRightKey) {
+      _refreshButtonFocusNode.requestFocus();
+      return KeyEventResult.handled;
+    }
+    if (key.isDownKey) {
+      _focusCurrentTab();
+      return KeyEventResult.handled;
+    }
+    if (key.isUpKey) {
+      return KeyEventResult.handled; // Block at boundary
+    }
+    if (key.isSelectKey) {
+      _showLibraryManagementSheet();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  /// Handle key events for the refresh button in app bar
+  KeyEventResult _handleRefreshKeyEvent(FocusNode node, KeyEvent event) {
+    if (!event.isActionable) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+
+    if (key.isLeftKey) {
+      // Navigate to edit button if libraries exist, else to last tab
+      final librariesProvider = context.read<LibrariesProvider>();
+      if (librariesProvider.libraries.isNotEmpty) {
+        _editButtonFocusNode.requestFocus();
+      } else {
+        getTabChipFocusNode(3).requestFocus();
+      }
+      return KeyEventResult.handled;
+    }
+    if (key.isRightKey || key.isUpKey) {
+      return KeyEventResult.handled; // Block at boundary
+    }
+    if (key.isDownKey) {
+      _focusCurrentTab();
+      return KeyEventResult.handled;
+    }
+    if (key.isSelectKey) {
+      _refreshCurrentTab();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   @override
   void dispose() {
-    _tabController.removeListener(_onTabChanged);
-    _tabController.dispose();
     _cancelToken?.cancel();
+    _outerScrollController.dispose();
     _recommendedTabChipFocusNode.dispose();
     _browseTabChipFocusNode.dispose();
     _collectionsTabChipFocusNode.dispose();
     _playlistsTabChipFocusNode.dispose();
-    // Clear L1/R1 callbacks
-    GamepadService.onL1Pressed = null;
-    GamepadService.onR1Pressed = null;
+    _editButtonFocusNode.removeListener(_onEditFocusChange);
+    _editButtonFocusNode.dispose();
+    _refreshButtonFocusNode.removeListener(_onRefreshFocusChange);
+    _refreshButtonFocusNode.dispose();
+    disposeTabNavigation();
     super.dispose();
   }
 
@@ -319,118 +436,13 @@ class _LibrariesScreenState extends State<LibrariesScreen>
   }
 
   /// Check if libraries come from multiple servers
-  bool get _hasMultipleServers {
-    final uniqueServerIds = _allLibraries.where((lib) => lib.serverId != null).map((lib) => lib.serverId).toSet();
+  bool _hasMultipleServers(List<PlexLibrary> libraries) {
+    final uniqueServerIds = libraries.where((lib) => lib.serverId != null).map((lib) => lib.serverId).toSet();
     return uniqueServerIds.length > 1;
   }
 
-  Future<void> _loadLibraries() async {
-    // Extract context dependencies before async gap
-    final multiServerProvider = Provider.of<MultiServerProvider>(context, listen: false);
-    final hiddenLibrariesProvider = Provider.of<HiddenLibrariesProvider>(context, listen: false);
-
-    setState(() {
-      _isLoadingLibraries = true;
-      _errorMessage = null;
-    });
-
-    try {
-      // Check if we have any connected servers
-      if (!multiServerProvider.hasConnectedServers) {
-        throw Exception(t.errors.noClientAvailable);
-      }
-
-      final storage = await StorageService.getInstance();
-
-      // Fetch libraries from all servers
-      final allLibraries = await multiServerProvider.aggregationService.getLibrariesFromAllServers();
-
-      // Filter out music libraries (type: 'artist') since music playback is not yet supported
-      // Only show movie and TV show libraries
-      final filteredLibraries = allLibraries.where((lib) => !ContentTypeHelper.isMusicLibrary(lib)).toList();
-
-      // Load saved library order and apply it
-      final savedOrder = storage.getLibraryOrder();
-      final orderedLibraries = _applyLibraryOrder(filteredLibraries, savedOrder);
-
-      _updateState(() {
-        _allLibraries = orderedLibraries; // Store all libraries with ordering applied
-        _isLoadingLibraries = false;
-      });
-
-      if (allLibraries.isNotEmpty) {
-        // Compute visible libraries for initial load
-        final hiddenKeys = hiddenLibrariesProvider.hiddenLibraryKeys;
-        final visibleLibraries = allLibraries.where((lib) => !hiddenKeys.contains(lib.globalKey)).toList();
-
-        // Load saved preferences
-        final savedLibraryKey = storage.getSelectedLibraryKey();
-
-        // Find the library by key in visible libraries
-        String? libraryGlobalKeyToLoad;
-        if (savedLibraryKey != null) {
-          // Check if saved library exists and is visible
-          final libraryExists = visibleLibraries.any((lib) => lib.globalKey == savedLibraryKey);
-          if (libraryExists) {
-            libraryGlobalKeyToLoad = savedLibraryKey;
-          }
-        }
-
-        // Fallback to first visible library if saved key not found
-        if (libraryGlobalKeyToLoad == null && visibleLibraries.isNotEmpty) {
-          libraryGlobalKeyToLoad = visibleLibraries.first.globalKey;
-        }
-
-        if (libraryGlobalKeyToLoad != null && mounted) {
-          final savedFilters = storage.getLibraryFilters(sectionId: libraryGlobalKeyToLoad);
-          if (savedFilters.isNotEmpty) {
-            _selectedFilters = Map.from(savedFilters);
-          }
-          _loadLibraryContent(libraryGlobalKeyToLoad);
-        }
-      }
-    } catch (e) {
-      _updateState(() {
-        _errorMessage = _getErrorMessage(e, 'libraries');
-        _isLoadingLibraries = false;
-      });
-    }
-  }
-
-  List<PlexLibrary> _applyLibraryOrder(List<PlexLibrary> libraries, List<String>? savedOrder) {
-    if (savedOrder == null || savedOrder.isEmpty) {
-      return libraries;
-    }
-
-    // Create a map for quick lookup
-    final libraryMap = {for (var lib in libraries) lib.globalKey: lib};
-
-    // Build ordered list based on saved order
-    final orderedLibraries = <PlexLibrary>[];
-    final addedKeys = <String>{};
-
-    // Add libraries in saved order
-    for (final key in savedOrder) {
-      if (libraryMap.containsKey(key)) {
-        orderedLibraries.add(libraryMap[key]!);
-        addedKeys.add(key);
-      }
-    }
-
-    // Add any new libraries that weren't in the saved order
-    for (final library in libraries) {
-      if (!addedKeys.contains(library.globalKey)) {
-        orderedLibraries.add(library);
-      }
-    }
-
-    return orderedLibraries;
-  }
-
-  Future<void> _saveLibraryOrder() async {
-    final storage = await StorageService.getInstance();
-    final libraryKeys = _allLibraries.map((lib) => lib.globalKey).toList();
-    await storage.saveLibraryOrder(libraryKeys);
+  /// Notify parent that library order changed
+  void _notifyLibraryOrderChanged() {
     widget.onLibraryOrderChanged?.call();
   }
 
@@ -441,10 +453,14 @@ class _LibrariesScreenState extends State<LibrariesScreen>
   }
 
   Future<void> _loadLibraryContent(String libraryGlobalKey) async {
+    // Get libraries from provider
+    final librariesProvider = context.read<LibrariesProvider>();
+    final allLibraries = librariesProvider.libraries;
+
     // Compute visible libraries based on current provider state
     final hiddenLibrariesProvider = Provider.of<HiddenLibrariesProvider>(context, listen: false);
     final hiddenKeys = hiddenLibrariesProvider.hiddenLibraryKeys;
-    final visibleLibraries = _allLibraries.where((lib) => !hiddenKeys.contains(lib.globalKey)).toList();
+    final visibleLibraries = allLibraries.where((lib) => !hiddenKeys.contains(lib.globalKey)).toList();
 
     // Find the library by key
     final libraryIndex = visibleLibraries.indexWhere((lib) => lib.globalKey == libraryGlobalKey);
@@ -482,20 +498,17 @@ class _LibrariesScreenState extends State<LibrariesScreen>
     if (savedTabIndex != null && savedTabIndex >= 0 && savedTabIndex < 4) {
       // Set flag to prevent _onTabChanged from triggering focus
       _isRestoringTab = true;
-      _updateState(() {
-        _tabController.index = savedTabIndex;
-      });
-      // Clear flag after the tab change has been processed
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _isRestoringTab = false;
-      });
+      // Use animateTo with zero duration for instant switch without animation race conditions
+      tabController.animateTo(savedTabIndex, duration: Duration.zero);
+      // Clear flag synchronously - animateTo with zero duration completes immediately
+      _isRestoringTab = false;
     }
 
     // Focus is handled by onDataLoaded callbacks from each tab.
     // However, on first load the tab might finish loading before the tab index
     // is restored. Check if the current tab has already loaded and focus if so.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _selectedLibraryGlobalKey == libraryGlobalKey && _loadedTabs.contains(_tabController.index)) {
+      if (mounted && _selectedLibraryGlobalKey == libraryGlobalKey && _loadedTabs.contains(tabController.index)) {
         _focusCurrentTab();
       }
     });
@@ -641,12 +654,13 @@ class _LibrariesScreenState extends State<LibrariesScreen>
   // Public method to refresh content (for normal navigation)
   @override
   void refresh() {
-    _loadLibraries();
+    // Reinitialize with current libraries
+    _initializeWithLibraries();
   }
 
   // Refresh the currently active tab
   void _refreshCurrentTab() {
-    switch (_tabController.index) {
+    switch (tabController.index) {
       case 0: // Recommended tab
         final refreshable = _recommendedTabKey.currentState;
         if (refreshable is Refreshable) {
@@ -678,14 +692,19 @@ class _LibrariesScreenState extends State<LibrariesScreen>
   @override
   void fullRefresh() {
     appLogger.d('LibrariesScreen.fullRefresh() called - reloading all content');
-    // Reload libraries and clear any selected library/filters
+    // Clear local state
     _selectedLibraryGlobalKey = null;
     _selectedFilters.clear();
     _items.clear();
-    _loadLibraries();
+    _errorMessage = null;
+    setState(() {});
+
+    // Reinitialize with current libraries from provider
+    _initializeWithLibraries();
   }
 
   Future<void> _toggleLibraryVisibility(PlexLibrary library) async {
+    final librariesProvider = context.read<LibrariesProvider>();
     final hiddenLibrariesProvider = Provider.of<HiddenLibrariesProvider>(context, listen: false);
     final isHidden = hiddenLibrariesProvider.hiddenLibraryKeys.contains(library.globalKey);
 
@@ -700,7 +719,8 @@ class _LibrariesScreenState extends State<LibrariesScreen>
       // If we just hid the selected library, select the first visible one
       if (isCurrentlySelected) {
         // Compute visible libraries after hiding
-        final visibleLibraries = _allLibraries
+        final allLibraries = librariesProvider.libraries;
+        final visibleLibraries = allLibraries
             .where((lib) => !hiddenLibrariesProvider.hiddenLibraryKeys.contains(lib.globalKey))
             .toList();
 
@@ -768,25 +788,43 @@ class _LibrariesScreenState extends State<LibrariesScreen>
   }
 
   void _showLibraryManagementSheet() {
+    final librariesProvider = context.read<LibrariesProvider>();
     final hiddenLibrariesProvider = Provider.of<HiddenLibrariesProvider>(context, listen: false);
+    final allLibraries = librariesProvider.libraries;
 
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => _LibraryManagementSheet(
-        allLibraries: List.from(_allLibraries),
-        hiddenLibraryKeys: hiddenLibrariesProvider.hiddenLibraryKeys,
-        onReorder: (reorderedLibraries) {
-          setState(() {
-            _allLibraries = reorderedLibraries;
-          });
-          _saveLibraryOrder();
-        },
-        onToggleVisibility: _toggleLibraryVisibility,
-        getLibraryMenuItems: _getLibraryMenuItems,
-        onLibraryMenuAction: _handleLibraryMenuAction,
-      ),
-    );
+    if (PlatformDetector.isTV()) {
+      showDialog(
+        context: context,
+        builder: (context) => _LibraryManagementSheet(
+          isDialog: true,
+          allLibraries: List.from(allLibraries),
+          hiddenLibraryKeys: hiddenLibrariesProvider.hiddenLibraryKeys,
+          onReorder: (reorderedLibraries) {
+            librariesProvider.updateLibraryOrder(reorderedLibraries);
+            _notifyLibraryOrderChanged();
+          },
+          onToggleVisibility: _toggleLibraryVisibility,
+          getLibraryMenuItems: _getLibraryMenuItems,
+          onLibraryMenuAction: _handleLibraryMenuAction,
+        ),
+      );
+    } else {
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (context) => _LibraryManagementSheet(
+          allLibraries: List.from(allLibraries),
+          hiddenLibraryKeys: hiddenLibrariesProvider.hiddenLibraryKeys,
+          onReorder: (reorderedLibraries) {
+            librariesProvider.updateLibraryOrder(reorderedLibraries);
+            _notifyLibraryOrderChanged();
+          },
+          onToggleVisibility: _toggleLibraryVisibility,
+          getLibraryMenuItems: _getLibraryMenuItems,
+          onLibraryMenuAction: _handleLibraryMenuAction,
+        ),
+      );
+    }
   }
 
   Future<void> _performLibraryAction({
@@ -915,13 +953,12 @@ class _LibrariesScreenState extends State<LibrariesScreen>
   }
 
   Widget _buildTabChip(String label, int index) {
-    final isSelected = _tabController.index == index;
-    const tabCount = 4; // Recommended, Browse, Collections, Playlists
+    final isSelected = tabController.index == index;
 
     return FocusableTabChip(
       label: label,
       isSelected: isSelected,
-      focusNode: _getTabChipFocusNode(index),
+      focusNode: getTabChipFocusNode(index),
       onSelect: () {
         if (isSelected) {
           // Already selected - navigate to tab content
@@ -929,7 +966,7 @@ class _LibrariesScreenState extends State<LibrariesScreen>
         } else {
           // Switch to this tab
           setState(() {
-            _tabController.index = index;
+            tabController.index = index;
           });
         }
       },
@@ -937,24 +974,32 @@ class _LibrariesScreenState extends State<LibrariesScreen>
           ? () {
               final newIndex = index - 1;
               setState(() {
-                _suppressAutoFocus = true;
-                _tabController.index = newIndex;
+                suppressAutoFocus = true;
+                tabController.index = newIndex;
               });
-              _getTabChipFocusNode(newIndex).requestFocus();
+              getTabChipFocusNode(newIndex).requestFocus();
             }
-          : null,
+          : onTabBarBack,
       onNavigateRight: index < tabCount - 1
           ? () {
               final newIndex = index + 1;
               setState(() {
-                _suppressAutoFocus = true;
-                _tabController.index = newIndex;
+                suppressAutoFocus = true;
+                tabController.index = newIndex;
               });
-              _getTabChipFocusNode(newIndex).requestFocus();
+              getTabChipFocusNode(newIndex).requestFocus();
             }
-          : null,
-      onNavigateDown: _focusCurrentTab,
-      onBack: _onTabBarBack,
+          : () {
+              // Navigate to first action button (edit if libraries exist, else refresh)
+              final librariesProvider = context.read<LibrariesProvider>();
+              if (librariesProvider.libraries.isNotEmpty) {
+                _editButtonFocusNode.requestFocus();
+              } else {
+                _refreshButtonFocusNode.requestFocus();
+              }
+            },
+      onNavigateDown: _focusCurrentTabFromTabBar,
+      onBack: onTabBarBack,
     );
   }
 
@@ -1006,7 +1051,7 @@ class _LibrariesScreenState extends State<LibrariesScreen>
           children: [
             AppIcon(ContentTypeHelper.getLibraryIcon(selectedLibrary.type), fill: 1, size: 20),
             const SizedBox(width: 8),
-            if (_hasMultipleServers && selectedLibrary.serverName != null)
+            if (_hasMultipleServers(visibleLibraries) && selectedLibrary.serverName != null)
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
@@ -1032,125 +1077,160 @@ class _LibrariesScreenState extends State<LibrariesScreen>
 
   @override
   Widget build(BuildContext context) {
+    // Watch libraries provider for updates
+    final librariesProvider = context.watch<LibrariesProvider>();
+    final allLibraries = librariesProvider.libraries;
+    final isLoadingLibraries = librariesProvider.isLoading;
+
     // Watch for hidden libraries changes to trigger rebuild
     final hiddenLibrariesProvider = context.watch<HiddenLibrariesProvider>();
     final hiddenKeys = hiddenLibrariesProvider.hiddenLibraryKeys;
 
     // Compute visible libraries (filtered from all libraries)
-    final visibleLibraries = _allLibraries.where((lib) => !hiddenKeys.contains(lib.globalKey)).toList();
+    final visibleLibraries = allLibraries.where((lib) => !hiddenKeys.contains(lib.globalKey)).toList();
 
     return Scaffold(
-      body: CustomScrollView(
-        slivers: [
-          DesktopSliverAppBar(
-            title: _buildAppBarTitle(visibleLibraries),
-            floating: true,
-            pinned: true,
-            backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-            surfaceTintColor: Colors.transparent,
-            shadowColor: Colors.transparent,
-            scrolledUnderElevation: 0,
-            actions: [
-              if (_allLibraries.isNotEmpty)
-                IconButton(
-                  icon: const AppIcon(Symbols.edit_rounded, fill: 1),
-                  tooltip: t.libraries.manageLibraries,
-                  onPressed: _showLibraryManagementSheet,
-                ),
-              IconButton(
-                icon: const AppIcon(Symbols.refresh_rounded, fill: 1),
-                tooltip: t.common.refresh,
-                onPressed: _refreshCurrentTab,
-              ),
-            ],
-          ),
-          if (_isLoadingLibraries)
-            const SliverFillRemaining(child: Center(child: CircularProgressIndicator()))
-          else if (_errorMessage != null && visibleLibraries.isEmpty)
-            SliverFillRemaining(
-              child: ErrorStateWidget(
-                message: _errorMessage!,
-                icon: Symbols.error_outline_rounded,
-                onRetry: _loadLibraries,
-              ),
-            )
-          else if (visibleLibraries.isEmpty)
-            SliverFillRemaining(
-              child: EmptyStateWidget(message: t.libraries.noLibrariesFound, icon: Symbols.video_library_rounded),
-            )
-          else ...[
-            // Tab selector chips (only on mobile - desktop has them in app bar)
-            if (_selectedLibraryGlobalKey != null && !PlatformDetector.shouldUseSideNavigation(context))
-              SliverToBoxAdapter(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: [
-                        _buildTabChip(t.libraries.tabs.recommended, 0),
-                        const SizedBox(width: 8),
-                        _buildTabChip(t.libraries.tabs.browse, 1),
-                        const SizedBox(width: 8),
-                        _buildTabChip(t.libraries.tabs.collections, 2),
-                        const SizedBox(width: 8),
-                        _buildTabChip(t.libraries.tabs.playlists, 3),
-                      ],
+      body: ScrollConfiguration(
+        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+        child: CustomScrollView(
+          controller: _outerScrollController,
+          slivers: [
+            DesktopSliverAppBar(
+              title: _buildAppBarTitle(visibleLibraries),
+              pinned: true,
+              backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+              surfaceTintColor: Colors.transparent,
+              shadowColor: Colors.transparent,
+              scrolledUnderElevation: 0,
+              actions: [
+                if (allLibraries.isNotEmpty)
+                  Focus(
+                    focusNode: _editButtonFocusNode,
+                    onKeyEvent: _handleEditKeyEvent,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: _isEditFocused ? Colors.white.withValues(alpha: 0.2) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: IconButton(
+                        icon: const AppIcon(Symbols.edit_rounded, fill: 1),
+                        tooltip: t.libraries.manageLibraries,
+                        onPressed: _showLibraryManagementSheet,
+                      ),
+                    ),
+                  ),
+                Focus(
+                  focusNode: _refreshButtonFocusNode,
+                  onKeyEvent: _handleRefreshKeyEvent,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: _isRefreshFocused ? Colors.white.withValues(alpha: 0.2) : Colors.transparent,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: IconButton(
+                      icon: const AppIcon(Symbols.refresh_rounded, fill: 1),
+                      tooltip: t.common.refresh,
+                      onPressed: _refreshCurrentTab,
                     ),
                   ),
                 ),
-              ),
-
-            // Tab content
-            if (_selectedLibraryGlobalKey != null)
+              ],
+            ),
+            if (isLoadingLibraries)
+              const SliverFillRemaining(child: Center(child: CircularProgressIndicator()))
+            else if (_errorMessage != null && visibleLibraries.isEmpty)
               SliverFillRemaining(
-                child: TabBarView(
-                  key: ValueKey(_selectedLibraryGlobalKey),
-                  controller: _tabController,
-                  children: [
-                    LibraryRecommendedTab(
-                      key: _recommendedTabKey,
-                      library: _allLibraries.firstWhere((lib) => lib.globalKey == _selectedLibraryGlobalKey),
-                      isActive: _tabController.index == 0,
-                      suppressAutoFocus: _suppressAutoFocus,
-                      onDataLoaded: () => _handleTabDataLoaded(0),
-                      onBack: focusTabBar,
-                    ),
-                    LibraryBrowseTab(
-                      key: _browseTabKey,
-                      library: _allLibraries.firstWhere((lib) => lib.globalKey == _selectedLibraryGlobalKey),
-                      isActive: _tabController.index == 1,
-                      suppressAutoFocus: _suppressAutoFocus,
-                      onDataLoaded: () => _handleTabDataLoaded(1),
-                      onBack: focusTabBar,
-                    ),
-                    LibraryCollectionsTab(
-                      key: _collectionsTabKey,
-                      library: _allLibraries.firstWhere((lib) => lib.globalKey == _selectedLibraryGlobalKey),
-                      isActive: _tabController.index == 2,
-                      suppressAutoFocus: _suppressAutoFocus,
-                      onDataLoaded: () => _handleTabDataLoaded(2),
-                      onBack: focusTabBar,
-                    ),
-                    LibraryPlaylistsTab(
-                      key: _playlistsTabKey,
-                      library: _allLibraries.firstWhere((lib) => lib.globalKey == _selectedLibraryGlobalKey),
-                      isActive: _tabController.index == 3,
-                      suppressAutoFocus: _suppressAutoFocus,
-                      onDataLoaded: () => _handleTabDataLoaded(3),
-                      onBack: focusTabBar,
-                    ),
-                  ],
+                child: ErrorStateWidget(
+                  message: _errorMessage!,
+                  icon: Symbols.error_outline_rounded,
+                  onRetry: () {
+                    final librariesProvider = context.read<LibrariesProvider>();
+                    librariesProvider.refresh();
+                  },
                 ),
-              ),
+              )
+            else if (visibleLibraries.isEmpty)
+              SliverFillRemaining(
+                child: EmptyStateWidget(message: t.libraries.noLibrariesFound, icon: Symbols.video_library_rounded),
+              )
+            else ...[
+              // Tab selector chips (only on mobile - desktop has them in app bar)
+              if (_selectedLibraryGlobalKey != null && !PlatformDetector.shouldUseSideNavigation(context))
+                SliverToBoxAdapter(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          _buildTabChip(t.libraries.tabs.recommended, 0),
+                          const SizedBox(width: 8),
+                          _buildTabChip(t.libraries.tabs.browse, 1),
+                          const SizedBox(width: 8),
+                          _buildTabChip(t.libraries.tabs.collections, 2),
+                          const SizedBox(width: 8),
+                          _buildTabChip(t.libraries.tabs.playlists, 3),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+
+              // Tab content
+              if (_selectedLibraryGlobalKey != null)
+                SliverFillRemaining(
+                  child: TabBarView(
+                    key: ValueKey(_selectedLibraryGlobalKey),
+                    controller: tabController,
+                    // Disable swipe on desktop - trackpad scrolling triggers accidental tab switches
+                    // See: https://github.com/flutter/flutter/issues/11132
+                    physics: PlatformDetector.isDesktop(context) ? const NeverScrollableScrollPhysics() : null,
+                    children: [
+                      LibraryRecommendedTab(
+                        key: _recommendedTabKey,
+                        library: allLibraries.firstWhere((lib) => lib.globalKey == _selectedLibraryGlobalKey),
+                        isActive: tabController.index == 0,
+                        suppressAutoFocus: suppressAutoFocus,
+                        onDataLoaded: () => _handleTabDataLoaded(0),
+                        onBack: focusTabBar,
+                      ),
+                      LibraryBrowseTab(
+                        key: _browseTabKey,
+                        library: allLibraries.firstWhere((lib) => lib.globalKey == _selectedLibraryGlobalKey),
+                        isActive: tabController.index == 1,
+                        suppressAutoFocus: suppressAutoFocus,
+                        onDataLoaded: () => _handleTabDataLoaded(1),
+                        onBack: focusTabBar,
+                      ),
+                      LibraryCollectionsTab(
+                        key: _collectionsTabKey,
+                        library: allLibraries.firstWhere((lib) => lib.globalKey == _selectedLibraryGlobalKey),
+                        isActive: tabController.index == 2,
+                        suppressAutoFocus: suppressAutoFocus,
+                        onDataLoaded: () => _handleTabDataLoaded(2),
+                        onBack: focusTabBar,
+                      ),
+                      LibraryPlaylistsTab(
+                        key: _playlistsTabKey,
+                        library: allLibraries.firstWhere((lib) => lib.globalKey == _selectedLibraryGlobalKey),
+                        isActive: tabController.index == 3,
+                        suppressAutoFocus: suppressAutoFocus,
+                        onDataLoaded: () => _handleTabDataLoaded(3),
+                        onBack: focusTabBar,
+                      ),
+                    ],
+                  ),
+                ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
 }
 
 class _LibraryManagementSheet extends StatefulWidget {
+  final bool isDialog;
   final List<PlexLibrary> allLibraries;
   final Set<String> hiddenLibraryKeys;
   final Function(List<PlexLibrary>) onReorder;
@@ -1159,6 +1239,7 @@ class _LibraryManagementSheet extends StatefulWidget {
   final void Function(String action, PlexLibrary library) onLibraryMenuAction;
 
   const _LibraryManagementSheet({
+    this.isDialog = false,
     required this.allLibraries,
     required this.hiddenLibraryKeys,
     required this.onReorder,
@@ -1181,6 +1262,8 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
   int? _originalIndex; // Original position before move (for cancel)
   List<PlexLibrary>? _originalOrder; // Original order before move (for cancel)
   final FocusNode _listFocusNode = FocusNode();
+  final ScrollController _dialogScrollController = ScrollController();
+  bool _backKeyDownSeen = false;
 
   @override
   void initState() {
@@ -1191,13 +1274,73 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
   @override
   void dispose() {
     _listFocusNode.dispose();
+    _dialogScrollController.dispose();
     super.dispose();
   }
 
-  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+  void _ensureFocusedVisible() {
+    if (!widget.isDialog) return;
+    if (!_dialogScrollController.hasClients) return;
 
+    const double itemHeight = 72.0; // Material ListTile with subtitle
+    const double listTopPadding = 8.0;
+    final double targetTop = listTopPadding + (_focusedIndex * itemHeight);
+    final double targetBottom = targetTop + itemHeight;
+
+    final double viewportTop = _dialogScrollController.offset;
+    final double viewportHeight = _dialogScrollController.position.viewportDimension;
+    final double viewportBottom = viewportTop + viewportHeight;
+
+    // Already fully visible — skip
+    if (targetTop >= viewportTop && targetBottom <= viewportBottom) return;
+
+    // Place item at ~25% from top of viewport
+    final double destination = (targetTop - viewportHeight * 0.25).clamp(
+      0.0,
+      _dialogScrollController.position.maxScrollExtent,
+    );
+
+    _dialogScrollController.animateTo(destination, duration: const Duration(milliseconds: 150), curve: Curves.easeOut);
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     final key = event.logicalKey;
+
+    // Track back key down/up pairing. If focus was elsewhere during KeyDown
+    // (e.g., on a bottom sheet) and returns here before KeyUp, we get a stray
+    // KeyUp that would incorrectly pop the dialog. Consume it instead.
+    if (key.isBackKey) {
+      if (event is KeyDownEvent) {
+        _backKeyDownSeen = true;
+      } else if (event is KeyUpEvent && !_backKeyDownSeen) {
+        return KeyEventResult.handled;
+      }
+      if (event is KeyUpEvent) {
+        _backKeyDownSeen = false;
+      }
+    }
+
+    final backResult = handleBackKeyAction(event, () {
+      if (_movingIndex != null) {
+        // Cancel move - restore original position
+        setState(() {
+          if (_originalOrder != null) {
+            _tempLibraries = List.from(_originalOrder!);
+          }
+          _focusedIndex = _originalIndex ?? 0;
+          _movingIndex = null;
+          _originalIndex = null;
+          _originalOrder = null;
+        });
+      } else {
+        Navigator.pop(context);
+      }
+    });
+    if (backResult != KeyEventResult.ignored) {
+      return backResult;
+    }
+
+    if (!event.isActionable) return KeyEventResult.ignored;
 
     if (_movingIndex != null) {
       // Move mode - arrows reorder the item
@@ -1208,6 +1351,7 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
           _movingIndex = _movingIndex! - 1;
           _focusedIndex = _movingIndex!;
         });
+        _ensureFocusedVisible();
         return KeyEventResult.handled;
       }
       if (key.isDownKey && _movingIndex! < _tempLibraries.length - 1) {
@@ -1217,25 +1361,13 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
           _movingIndex = _movingIndex! + 1;
           _focusedIndex = _movingIndex!;
         });
+        _ensureFocusedVisible();
         return KeyEventResult.handled;
       }
       if (key.isSelectKey) {
         // Confirm move - apply the reorder
         widget.onReorder(_tempLibraries);
         setState(() {
-          _movingIndex = null;
-          _originalIndex = null;
-          _originalOrder = null;
-        });
-        return KeyEventResult.handled;
-      }
-      if (key.isBackKey) {
-        // Cancel move - restore original position
-        setState(() {
-          if (_originalOrder != null) {
-            _tempLibraries = List.from(_originalOrder!);
-          }
-          _focusedIndex = _originalIndex ?? 0;
           _movingIndex = null;
           _originalIndex = null;
           _originalOrder = null;
@@ -1249,6 +1381,7 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
           _focusedIndex--;
           _focusedColumn = 0; // Reset to row when changing rows
         });
+        _ensureFocusedVisible();
         return KeyEventResult.handled;
       }
       if (key.isDownKey && _focusedIndex < _tempLibraries.length - 1) {
@@ -1256,6 +1389,7 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
           _focusedIndex++;
           _focusedColumn = 0; // Reset to row when changing rows
         });
+        _ensureFocusedVisible();
         return KeyEventResult.handled;
       }
       if (key.isLeftKey && _focusedColumn > 0) {
@@ -1285,10 +1419,11 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
         }
         return KeyEventResult.handled;
       }
-      if (key.isBackKey) {
-        Navigator.pop(context);
-        return KeyEventResult.handled;
-      }
+    }
+
+    // Block d-pad keys at boundaries so focus doesn't escape the dialog
+    if (key.isDpadDirection) {
+      return KeyEventResult.handled;
     }
 
     return KeyEventResult.ignored;
@@ -1374,6 +1509,39 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
     final hiddenLibrariesProvider = context.watch<HiddenLibrariesProvider>();
     final hiddenLibraryKeys = hiddenLibrariesProvider.hiddenLibraryKeys;
 
+    if (widget.isDialog) {
+      return Dialog(
+        child: PopScope(
+          canPop: false, // Prevent system back from double-popping; handled by _handleKeyEvent
+          onPopInvokedWithResult: (didPop, result) {},
+          child: Scaffold(
+            appBar: AppBar(
+              title: Row(
+                children: [
+                  const AppIcon(Symbols.edit_rounded, fill: 1),
+                  const SizedBox(width: 12),
+                  Text(t.libraries.manageLibraries),
+                ],
+              ),
+              automaticallyImplyLeading: false,
+              actions: [
+                IconButton(
+                  icon: const AppIcon(Symbols.close_rounded, fill: 1),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+            body: Focus(
+              focusNode: _listFocusNode,
+              autofocus: InputModeTracker.isKeyboardMode(context),
+              onKeyEvent: _handleKeyEvent,
+              child: _buildFlatLibraryListDialog(hiddenLibraryKeys),
+            ),
+          ),
+        ),
+      );
+    }
+
     return DraggableScrollableSheet(
       initialChildSize: 0.7,
       minChildSize: 0.5,
@@ -1416,6 +1584,36 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
               ),
             ),
           ],
+        );
+      },
+    );
+  }
+
+  /// Build library list for dialog (TV) using ListView with scroll-into-view support
+  Widget _buildFlatLibraryListDialog(Set<String> hiddenLibraryKeys) {
+    final nonUniqueNames = _getNonUniqueLibraryNames();
+    final isKeyboardMode = InputModeTracker.isKeyboardMode(context);
+
+    return ReorderableListView.builder(
+      scrollController: _dialogScrollController,
+      onReorder: _reorderLibraries,
+      itemCount: _tempLibraries.length,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      buildDefaultDragHandles: false,
+      itemBuilder: (context, index) {
+        final library = _tempLibraries[index];
+        final showServerName = nonUniqueNames.contains(library.title) && library.serverName != null;
+        final isFocused = isKeyboardMode && index == _focusedIndex;
+        final isMoving = index == _movingIndex;
+
+        return _buildLibraryTile(
+          library,
+          index,
+          hiddenLibraryKeys,
+          showServerName: showServerName,
+          isFocused: isFocused,
+          isMoving: isMoving,
+          focusedColumn: isFocused ? _focusedColumn : null,
         );
       },
     );
@@ -1511,9 +1709,10 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                decoration: isVisibilityButtonFocused
-                    ? BoxDecoration(color: colorScheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(20))
-                    : null,
+                decoration: FocusTheme.focusBackgroundDecoration(
+                  isFocused: isVisibilityButtonFocused,
+                  borderRadius: 20,
+                ),
                 child: IconButton(
                   icon: AppIcon(isHidden ? Symbols.visibility_off_rounded : Symbols.visibility_rounded, fill: 1),
                   tooltip: isHidden ? t.libraries.showLibrary : t.libraries.hideLibrary,
@@ -1521,9 +1720,7 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
                 ),
               ),
               Container(
-                decoration: isOptionsButtonFocused
-                    ? BoxDecoration(color: colorScheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(20))
-                    : null,
+                decoration: FocusTheme.focusBackgroundDecoration(isFocused: isOptionsButtonFocused, borderRadius: 20),
                 child: IconButton(
                   icon: const AppIcon(Symbols.more_vert_rounded, fill: 1),
                   tooltip: t.libraries.libraryOptions,

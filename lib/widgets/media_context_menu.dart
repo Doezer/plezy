@@ -16,9 +16,11 @@ import '../utils/library_refresh_notifier.dart';
 import '../utils/snackbar_helper.dart';
 import '../utils/dialogs.dart';
 import '../utils/focus_utils.dart';
+import '../focus/dpad_navigator.dart';
 import '../screens/media_detail_screen.dart';
 import '../screens/season_detail_screen.dart';
 import '../utils/smart_deletion_handler.dart';
+import '../utils/deletion_notifier.dart';
 import '../theme/mono_tokens.dart';
 import '../widgets/file_info_bottom_sheet.dart';
 import '../widgets/focusable_bottom_sheet.dart';
@@ -30,8 +32,9 @@ class _MenuAction {
   final String value;
   final IconData icon;
   final String label;
+  final Color? hoverColor;
 
-  _MenuAction({required this.value, required this.icon, required this.label});
+  _MenuAction({required this.value, required this.icon, required this.label, this.hoverColor});
 }
 
 /// A reusable wrapper widget that adds a context menu (long press / right click)
@@ -111,6 +114,10 @@ class MediaContextMenuState extends State<MediaContextMenu> {
   void _showContextMenu(BuildContext context) async {
     if (_isContextMenuOpen) return;
     _isContextMenuOpen = true;
+
+    // Capture the currently focused node for restoration after menu closes
+    final previousFocus = FocusManager.instance.primaryFocus;
+    bool didNavigate = false;
 
     final isPlaylist = widget.item is PlexPlaylist;
     final metadata = isPlaylist ? null : widget.item as PlexMetadata;
@@ -239,6 +246,21 @@ class MediaContextMenuState extends State<MediaContextMenu> {
           mediaType == PlexMediaType.season) {
         menuActions.add(_MenuAction(value: 'add_to', icon: Symbols.add_rounded, label: t.common.addTo));
       }
+
+      // Delete media item (for episodes, movies, shows, and seasons)
+      if (mediaType == PlexMediaType.episode ||
+          mediaType == PlexMediaType.movie ||
+          mediaType == PlexMediaType.show ||
+          mediaType == PlexMediaType.season) {
+        menuActions.add(
+          _MenuAction(
+            value: 'delete_media',
+            icon: Symbols.delete_rounded,
+            label: t.common.delete,
+            hoverColor: Colors.red,
+          ),
+        );
+      }
     } // End of regular menu items else block
 
     String? selected;
@@ -289,7 +311,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
       switch (selected) {
         case 'watch':
           if (isOffline && metadata?.serverId != null) {
-            // Offline mode: queue action for later sync
+            // Offline mode: queue action for later sync (emits WatchStateEvent)
             final offlineWatch = context.read<OfflineWatchProvider>();
             await offlineWatch.markAsWatched(serverId: metadata!.serverId!, ratingKey: metadata.ratingKey);
             if (context.mounted) {
@@ -297,13 +319,18 @@ class MediaContextMenuState extends State<MediaContextMenu> {
               widget.onRefresh?.call(metadata.ratingKey);
             }
           } else {
-            await _executeAction(context, () => client.markAsWatched(metadata!.ratingKey), t.messages.markedAsWatched);
+            // Pass metadata to emit WatchStateEvent for cross-screen updates
+            await _executeAction(
+              context,
+              () => client.markAsWatched(metadata!.ratingKey, metadata: metadata),
+              t.messages.markedAsWatched,
+            );
           }
           break;
 
         case 'unwatch':
           if (isOffline && metadata?.serverId != null) {
-            // Offline mode: queue action for later sync
+            // Offline mode: queue action for later sync (emits WatchStateEvent)
             final offlineWatch = context.read<OfflineWatchProvider>();
             await offlineWatch.markAsUnwatched(serverId: metadata!.serverId!, ratingKey: metadata.ratingKey);
             if (context.mounted) {
@@ -311,9 +338,10 @@ class MediaContextMenuState extends State<MediaContextMenu> {
               widget.onRefresh?.call(metadata.ratingKey);
             }
           } else {
+            // Pass metadata to emit WatchStateEvent for cross-screen updates
             await _executeAction(
               context,
-              () => client.markAsUnwatched(metadata!.ratingKey),
+              () => client.markAsUnwatched(metadata!.ratingKey, metadata: metadata),
               t.messages.markedAsUnwatched,
             );
           }
@@ -346,6 +374,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
           break;
 
         case 'series':
+          didNavigate = true;
           await _navigateToRelated(
             context,
             metadata!.grandparentRatingKey,
@@ -355,6 +384,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
           break;
 
         case 'season':
+          didNavigate = true;
           await _navigateToRelated(
             context,
             metadata!.parentRatingKey,
@@ -394,9 +424,23 @@ class MediaContextMenuState extends State<MediaContextMenu> {
         case 'delete_download':
           await _handleDeleteDownload(context);
           break;
+
+        case 'delete_media':
+          await _handleDeleteMediaItem(context, mediaType);
+          break;
       }
     } finally {
       _isContextMenuOpen = false;
+
+      // Restore focus to the previously focused item after the menu closes,
+      // but only if no navigation occurred and the focus node is still valid
+      if (!didNavigate && previousFocus != null && previousFocus.canRequestFocus) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (previousFocus.canRequestFocus) {
+            previousFocus.requestFocus();
+          }
+        });
+      }
     }
   }
 
@@ -994,6 +1038,44 @@ class MediaContextMenuState extends State<MediaContextMenu> {
     }
   }
 
+  /// Handle delete media item action
+  /// This permanently removes the media item and its associated files from the server
+  Future<void> _handleDeleteMediaItem(BuildContext context, PlexMediaType? mediaType) async {
+    final metadata = widget.item as PlexMetadata;
+    final isMultipleMediaItems = mediaType == PlexMediaType.show || mediaType == PlexMediaType.season;
+
+    // Show confirmation dialog
+    final confirmed = await showDeleteConfirmation(
+      context,
+      title: t.common.delete,
+      message: "${t.mediaMenu.confirmDelete}${isMultipleMediaItems ? "\n${t.mediaMenu.deleteMultipleWarning}" : ""}",
+    );
+
+    if (!confirmed || !context.mounted) return;
+
+    try {
+      final client = _getClientForItem();
+      final success = await client.deleteMediaItem(metadata.ratingKey);
+
+      if (context.mounted) {
+        if (success) {
+          showSuccessSnackBar(context, t.mediaMenu.mediaDeletedSuccessfully);
+          // Broadcast deletion event for cross-screen propagation
+          DeletionNotifier().notifyDeleted(metadata: metadata);
+          // Backward-compatible list refresh for screens that are not DeletionAware yet
+          widget.onListRefresh?.call();
+        } else {
+          showErrorSnackBar(context, t.mediaMenu.mediaFailedToDelete);
+        }
+      }
+    } catch (e) {
+      appLogger.e(t.mediaMenu.mediaFailedToDelete, error: e);
+      if (context.mounted) {
+        showErrorSnackBar(context, t.mediaMenu.mediaFailedToDelete);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
@@ -1153,6 +1235,7 @@ class _FocusableContextMenuSheetState extends State<_FocusableContextMenuSheet> 
                         leading: AppIcon(action.icon, fill: 1),
                         title: Text(action.label),
                         onTap: () => Navigator.pop(context, action.value),
+                        hoverColor: action.hoverColor,
                       );
                     }),
                   ],
@@ -1216,44 +1299,58 @@ class _FocusablePopupMenuState extends State<_FocusablePopupMenu> {
       top = screenSize.height - estimatedHeight - 8;
     }
 
-    return Stack(
-      children: [
-        // Barrier to close menu when clicking outside
-        Positioned.fill(
-          child: GestureDetector(
-            onTap: () => Navigator.pop(context),
-            behavior: HitTestBehavior.opaque,
-            child: Container(color: Colors.transparent),
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onKeyEvent: (node, event) {
+        if (SelectKeyUpSuppressor.consumeIfSuppressed(event)) {
+          return KeyEventResult.handled;
+        }
+        if (BackKeyUpSuppressor.consumeIfSuppressed(event)) {
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Stack(
+        children: [
+          // Barrier to close menu when clicking outside
+          Positioned.fill(
+            child: GestureDetector(
+              onTap: () => Navigator.pop(context),
+              behavior: HitTestBehavior.opaque,
+              child: Container(color: Colors.transparent),
+            ),
           ),
-        ),
-        // Menu
-        Positioned(
-          left: left,
-          top: top,
-          child: Material(
-            elevation: 8,
-            borderRadius: BorderRadius.circular(tokens(context).radiusSm),
-            clipBehavior: Clip.antiAlias,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: menuWidth, maxWidth: menuWidth),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: widget.actions.asMap().entries.map((entry) {
-                  final index = entry.key;
-                  final action = entry.value;
-                  return FocusableListTile(
-                    focusNode: index == 0 ? _initialFocusNode : null,
-                    leading: AppIcon(action.icon, fill: 1, size: 20),
-                    title: Text(action.label),
-                    onTap: () => Navigator.pop(context, action.value),
-                  );
-                }).toList(),
+          // Menu
+          Positioned(
+            left: left,
+            top: top,
+            child: Material(
+              elevation: 8,
+              borderRadius: BorderRadius.circular(tokens(context).radiusSm),
+              clipBehavior: Clip.antiAlias,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: menuWidth, maxWidth: menuWidth),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: widget.actions.asMap().entries.map((entry) {
+                    final index = entry.key;
+                    final action = entry.value;
+                    return FocusableListTile(
+                      focusNode: index == 0 ? _initialFocusNode : null,
+                      leading: AppIcon(action.icon, fill: 1, size: 20),
+                      title: Text(action.label),
+                      onTap: () => Navigator.pop(context, action.value),
+                      hoverColor: action.hoverColor,
+                    );
+                  }).toList(),
+                ),
               ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

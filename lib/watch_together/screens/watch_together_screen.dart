@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:provider/provider.dart';
 
 import '../../i18n/strings.g.dart';
 import '../../utils/app_logger.dart';
+import '../../utils/dialogs.dart';
 import '../../widgets/focused_scroll_scaffold.dart';
 import '../models/watch_session.dart';
 import '../providers/watch_together_provider.dart';
@@ -95,6 +97,7 @@ class _NotInSessionViewState extends State<_NotInSessionView> {
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
+                  autofocus: true,
                   onPressed: _isCreating || _isJoining ? null : _createSession,
                   icon: _isCreating
                       ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
@@ -141,15 +144,23 @@ class _NotInSessionViewState extends State<_NotInSessionView> {
   }
 
   Future<ControlMode?> _showControlModeDialog() {
+    const buttonPadding = EdgeInsets.symmetric(horizontal: 18, vertical: 14);
+    const buttonShape = StadiumBorder();
     return showDialog<ControlMode>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(t.watchTogether.controlMode),
         content: Text(t.watchTogether.controlModeQuestion),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: Text(t.common.cancel)),
+          TextButton(
+            autofocus: true,
+            onPressed: () => Navigator.pop(context),
+            style: TextButton.styleFrom(padding: buttonPadding, shape: buttonShape),
+            child: Text(t.common.cancel),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(context, ControlMode.hostOnly),
+            style: TextButton.styleFrom(padding: buttonPadding, shape: buttonShape),
             child: Text(t.watchTogether.hostOnly),
           ),
           FilledButton(
@@ -218,13 +229,7 @@ class _ActiveSessionContent extends StatelessWidget {
                             watchTogether.isHost ? t.watchTogether.hostingSession : t.watchTogether.inSession,
                             style: theme.textTheme.titleMedium,
                           ),
-                          Text(
-                            '${t.watchTogether.sessionCode}: ${session.sessionId}',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              fontFamily: 'monospace',
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
+                          _SessionCodeRow(sessionId: session.sessionId),
                         ],
                       ),
                     ),
@@ -325,6 +330,7 @@ class _ActiveSessionContent extends StatelessWidget {
         SizedBox(
           width: double.infinity,
           child: OutlinedButton.icon(
+            autofocus: true,
             onPressed: () => _leaveSession(context),
             style: OutlinedButton.styleFrom(
               foregroundColor: theme.colorScheme.error,
@@ -339,24 +345,55 @@ class _ActiveSessionContent extends StatelessWidget {
   }
 
   Future<void> _leaveSession(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(watchTogether.isHost ? t.watchTogether.endSessionQuestion : t.watchTogether.leaveSessionQuestion),
-        content: Text(watchTogether.isHost ? t.watchTogether.endSessionConfirm : t.watchTogether.leaveSessionConfirm),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(t.common.cancel)),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error),
-            child: Text(watchTogether.isHost ? t.watchTogether.end : t.watchTogether.leave),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: watchTogether.isHost ? t.watchTogether.endSessionQuestion : t.watchTogether.leaveSessionQuestion,
+      message: watchTogether.isHost ? t.watchTogether.endSessionConfirm : t.watchTogether.leaveSessionConfirm,
+      confirmText: watchTogether.isHost ? t.watchTogether.end : t.watchTogether.leave,
+      isDestructive: true,
     );
 
-    if (confirmed == true) {
+    if (confirmed) {
       await watchTogether.leaveSession();
     }
+  }
+}
+
+/// Tappable session code row with copy functionality
+class _SessionCodeRow extends StatelessWidget {
+  final String sessionId;
+
+  const _SessionCodeRow({required this.sessionId});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return InkWell(
+      onTap: () => _copySessionCode(context),
+      borderRadius: BorderRadius.circular(4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '${t.watchTogether.sessionCode}: $sessionId',
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontFamily: 'monospace',
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Icon(Symbols.content_copy_rounded, size: 14, color: theme.colorScheme.onSurfaceVariant),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _copySessionCode(BuildContext context) {
+    Clipboard.setData(ClipboardData(text: sessionId));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t.watchTogether.sessionCodeCopied)));
   }
 }

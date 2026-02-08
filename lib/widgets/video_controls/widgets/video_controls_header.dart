@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:plezy/utils/formatters.dart';
 
 import '../../../models/plex_metadata.dart';
 import '../../../i18n/strings.g.dart';
@@ -56,12 +57,15 @@ class VideoControlsHeader extends StatelessWidget {
     final seriesName = metadata.grandparentTitle ?? metadata.title;
     final hasEpisodeInfo = metadata.parentIndex != null && metadata.index != null;
 
-    final titleText = hasEpisodeInfo
-        ? '$seriesName · S${metadata.parentIndex} E${metadata.index} · ${metadata.title}'
-        : seriesName;
+    List<String> parts = [seriesName];
+
+    if (hasEpisodeInfo) {
+      parts.add('S${metadata.parentIndex}E${metadata.index}');
+      parts.add(metadata.title);
+    }
 
     return Text(
-      titleText,
+      toBulletedString(parts),
       style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
@@ -69,6 +73,18 @@ class VideoControlsHeader extends StatelessWidget {
   }
 
   Widget _buildMultiLineTitle() {
+    List<String> secondLineParts = [];
+
+    if (metadata.parentIndex != null && metadata.index != null) {
+      secondLineParts.add('S${metadata.parentIndex}');
+      secondLineParts.add('E${metadata.index}');
+      secondLineParts.add(metadata.title);
+    }
+
+    if (metadata.duration != null) {
+      secondLineParts.add(formatDurationTextual(metadata.duration!));
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -78,9 +94,9 @@ class VideoControlsHeader extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
-        if (metadata.parentIndex != null && metadata.index != null)
+        if (secondLineParts.isNotEmpty)
           Text(
-            'S${metadata.parentIndex} · E${metadata.index} · ${metadata.title}',
+            toBulletedString(secondLineParts),
             style: const TextStyle(color: Colors.white70, fontSize: 14),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,

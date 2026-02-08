@@ -14,11 +14,13 @@ import 'package:flutter/services.dart'
         KeyEvent,
         KeyDownEvent,
         HardwareKeyboard;
-import 'package:macos_window_utils/macos_window_utils.dart';
+import '../../services/macos_window_service.dart';
+import '../../services/pip_service.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../mpv/mpv.dart';
 import '../../focus/dpad_navigator.dart';
+import '../../focus/focusable_wrapper.dart';
 
 import '../../services/plex_client.dart';
 import '../../services/plex_api_cache.dart';
@@ -26,6 +28,7 @@ import '../../models/plex_media_info.dart';
 import '../../models/plex_media_version.dart';
 import '../../models/plex_metadata.dart';
 import '../../screens/video_player_screen.dart';
+import '../../focus/key_event_utils.dart';
 import '../../services/keyboard_shortcuts_service.dart';
 import '../../services/settings_service.dart';
 import '../../utils/platform_detector.dart';
@@ -42,6 +45,11 @@ import 'widgets/track_chapter_controls.dart';
 import 'widgets/performance_overlay/performance_overlay.dart';
 import 'mobile_video_controls.dart';
 import 'desktop_video_controls.dart';
+import 'package:provider/provider.dart';
+
+import '../../models/shader_preset.dart';
+import '../../providers/shader_provider.dart';
+import '../../services/shader_service.dart';
 
 /// Custom video controls builder for Plex with chapter, audio, and subtitle support
 Widget plexVideoControlsBuilder(
@@ -51,6 +59,7 @@ Widget plexVideoControlsBuilder(
   VoidCallback? onPrevious,
   List<PlexMediaVersion>? availableVersions,
   int? selectedMediaIndex,
+  VoidCallback? onTogglePIPMode,
   int boxFitMode = 0,
   VoidCallback? onCycleBoxFitMode,
   Function(AudioTrack)? onAudioTrackChanged,
@@ -59,6 +68,11 @@ Widget plexVideoControlsBuilder(
   VoidCallback? onBack,
   bool canControl = true,
   ValueNotifier<bool>? hasFirstFrame,
+  FocusNode? playNextFocusNode,
+  ValueNotifier<bool>? controlsVisible,
+  ShaderService? shaderService,
+  VoidCallback? onShaderChanged,
+  String Function(Duration time)? thumbnailUrlBuilder,
 }) {
   return PlexVideoControls(
     player: player,
@@ -68,6 +82,7 @@ Widget plexVideoControlsBuilder(
     availableVersions: availableVersions ?? [],
     selectedMediaIndex: selectedMediaIndex ?? 0,
     boxFitMode: boxFitMode,
+    onTogglePIPMode: onTogglePIPMode,
     onCycleBoxFitMode: onCycleBoxFitMode,
     onAudioTrackChanged: onAudioTrackChanged,
     onSubtitleTrackChanged: onSubtitleTrackChanged,
@@ -75,6 +90,11 @@ Widget plexVideoControlsBuilder(
     onBack: onBack,
     canControl: canControl,
     hasFirstFrame: hasFirstFrame,
+    playNextFocusNode: playNextFocusNode,
+    controlsVisible: controlsVisible,
+    shaderService: shaderService,
+    onShaderChanged: onShaderChanged,
+    thumbnailUrlBuilder: thumbnailUrlBuilder,
   );
 }
 
@@ -86,6 +106,7 @@ class PlexVideoControls extends StatefulWidget {
   final List<PlexMediaVersion> availableVersions;
   final int selectedMediaIndex;
   final int boxFitMode;
+  final VoidCallback? onTogglePIPMode;
   final VoidCallback? onCycleBoxFitMode;
   final Function(AudioTrack)? onAudioTrackChanged;
   final Function(SubtitleTrack)? onSubtitleTrackChanged;
@@ -102,6 +123,21 @@ class PlexVideoControls extends StatefulWidget {
   /// Notifier for whether first video frame has rendered (shows loading state when false).
   final ValueNotifier<bool>? hasFirstFrame;
 
+  /// Optional focus node for Play Next dialog button (for TV navigation from timeline)
+  final FocusNode? playNextFocusNode;
+
+  /// Notifier to report controls visibility to parent (for popup positioning)
+  final ValueNotifier<bool>? controlsVisible;
+
+  /// Optional shader service for MPV shader control
+  final ShaderService? shaderService;
+
+  /// Called when shader preset changes
+  final VoidCallback? onShaderChanged;
+
+  /// Optional callback that returns a thumbnail URL for a given timestamp.
+  final String Function(Duration time)? thumbnailUrlBuilder;
+
   const PlexVideoControls({
     super.key,
     required this.player,
@@ -111,6 +147,7 @@ class PlexVideoControls extends StatefulWidget {
     this.availableVersions = const [],
     this.selectedMediaIndex = 0,
     this.boxFitMode = 0,
+    this.onTogglePIPMode,
     this.onCycleBoxFitMode,
     this.onAudioTrackChanged,
     this.onSubtitleTrackChanged,
@@ -118,6 +155,11 @@ class PlexVideoControls extends StatefulWidget {
     this.onBack,
     this.canControl = true,
     this.hasFirstFrame,
+    this.playNextFocusNode,
+    this.controlsVisible,
+    this.shaderService,
+    this.onShaderChanged,
+    this.thumbnailUrlBuilder,
   });
 
   @override
@@ -126,7 +168,6 @@ class PlexVideoControls extends StatefulWidget {
 
 class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListener, WidgetsBindingObserver {
   bool _showControls = true;
-  bool _controlsFullyHidden = false; // For Linux: true after fade-out completes
   List<PlexChapter> _chapters = [];
   bool _chaptersLoaded = false;
   Timer? _hideTimer;
@@ -138,6 +179,7 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
   int _audioSyncOffset = 0; // Default, loaded from settings
   int _subtitleSyncOffset = 0; // Default, loaded from settings
   bool _isRotationLocked = true; // Default locked (landscape only)
+  bool _clickVideoTogglesPlayback = false; // Default, loaded from settings
 
   // GlobalKey to access DesktopVideoControls state for focus management
   final GlobalKey<DesktopVideoControlsState> _desktopControlsKey = GlobalKey<DesktopVideoControlsState>();
@@ -152,6 +194,12 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
   double _doubleTapFeedbackOpacity = 0.0;
   bool _lastDoubleTapWasForward = true;
   Timer? _feedbackTimer;
+  int _accumulatedSkipSeconds = 0; // Stacking skip: total skip during active feedback
+  // Custom tap detection state (more reliable than Flutter's onDoubleTap)
+  DateTime? _lastSkipTapTime;
+  bool _lastSkipTapWasForward = true;
+  DateTime? _lastSkipActionTime; // Debounce: prevents double-tap counting as 2 skips
+  Timer? _singleTapTimer; // Timer for delayed single-tap action (toggle controls)
   // Seek throttle
   late final Throttle _seekThrottle;
   // Current marker state
@@ -162,12 +210,9 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
   StreamSubscription<bool>? _playingSubscription;
   // Completed subscription to show controls when video ends
   StreamSubscription<bool>? _completedSubscription;
-  // Window resize pause state
-  Timer? _resizeDebounceTimer;
-  bool _wasPlayingBeforeResize = false;
   // Auto-skip state
-  bool _autoSkipIntro = true;
-  bool _autoSkipCredits = true;
+  bool _autoSkipIntro = false;
+  bool _autoSkipCredits = false;
   int _autoSkipDelay = 5;
   Timer? _autoSkipTimer;
   double _autoSkipProgress = 0.0;
@@ -175,11 +220,22 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
   bool _videoPlayerNavigationEnabled = false;
   // Performance overlay
   bool _showPerformanceOverlay = false;
+  // Long-press 2x speed state
+  bool _isLongPressing = false;
+  // Skip marker button focus node (for TV D-pad navigation)
+  late final FocusNode _skipMarkerFocusNode;
+  double? _rateBeforeLongPress;
+  bool _showSpeedIndicator = false;
+
+  // PiP support
+  bool _isPipSupported = false;
+  final PipService _pipService = PipService();
 
   @override
   void initState() {
     super.initState();
     _focusNode = FocusNode();
+    _skipMarkerFocusNode = FocusNode(debugLabel: 'SkipMarkerButton');
     _seekThrottle = throttle(
       (Duration pos) => widget.player.seek(pos),
       const Duration(milliseconds: 200),
@@ -193,6 +249,7 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
     _listenToPosition();
     _listenToPlayingState();
     _listenToCompleted();
+    _checkPipSupport();
     // Add lifecycle observer to reload settings when app resumes
     WidgetsBinding.instance.addObserver(this);
     // Add window listener for tracking fullscreen state (for button icon)
@@ -200,6 +257,7 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
       windowManager.addListener(this);
       _initAlwaysOnTopState();
     }
+
     // Focus play/pause button on first frame if in keyboard mode
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusPlayPauseIfKeyboardMode();
@@ -208,6 +266,8 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
     HardwareKeyboard.instance.addHandler(_handleGlobalKeyEvent);
     // Listen for first frame to start auto-hide timer
     widget.hasFirstFrame?.addListener(_onFirstFrameReady);
+    // Listen for external requests to show controls (e.g. screen-level focus recovery)
+    widget.controlsVisible?.addListener(_onControlsVisibleExternal);
   }
 
   /// Called when hasFirstFrame changes - start auto-hide timer when first frame is ready
@@ -217,10 +277,19 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
     }
   }
 
-  /// Focus play/pause button if we're in keyboard navigation mode (desktop only)
+  /// Called when controlsVisible is set externally (e.g. screen-level focus recovery
+  /// after controls auto-hide ejects focus on Android TV).
+  void _onControlsVisibleExternal() {
+    if (widget.controlsVisible?.value == true && !_showControls && mounted) {
+      _showControlsWithFocus();
+    }
+  }
+
+  /// Focus play/pause button if we're in keyboard navigation mode (desktop/TV only)
   void _focusPlayPauseIfKeyboardMode() {
     if (!mounted) return;
-    final isMobile = PlatformDetector.isMobile(context);
+    if (!_videoPlayerNavigationEnabled) return;
+    final isMobile = PlatformDetector.isMobile(context) && !PlatformDetector.isTV();
     if (!isMobile && InputModeTracker.isKeyboardMode(context)) {
       _desktopControlsKey.currentState?.requestPlayPauseFocus();
     }
@@ -253,6 +322,15 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
           // Start auto-skip timer for new marker
           if (foundMarker != null) {
             _startAutoSkipTimer(foundMarker);
+
+            // Auto-focus skip button on TV when marker appears (only in keyboard/TV mode, if controls hidden)
+            if (PlatformDetector.isTV() && InputModeTracker.isKeyboardMode(context)) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted && !_showControls) {
+                  _skipMarkerFocusNode.requestFocus();
+                }
+              });
+            }
           } else {
             _cancelAutoSkipTimer();
           }
@@ -276,13 +354,17 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
   void _listenToCompleted() {
     _completedSubscription = widget.player.streams.completed.listen((completed) {
       if (completed && mounted) {
+        // Cancel long-press 2x speed if active
+        if (_isLongPressing) {
+          _handleLongPressCancel();
+        }
         // Show controls when video completes (for play next dialog etc.)
         setState(() {
           _showControls = true;
-          _controlsFullyHidden = false;
         });
+        // Notify parent of visibility change (for popup positioning)
+        widget.controlsVisible?.value = true;
         _hideTimer?.cancel();
-        _showLinuxControls();
       }
     });
   }
@@ -374,7 +456,14 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
         _autoSkipDelay = settingsService.getAutoSkipDelay();
         _videoPlayerNavigationEnabled = settingsService.getVideoPlayerNavigationEnabled();
         _showPerformanceOverlay = settingsService.getShowPerformanceOverlay();
+        _clickVideoTogglesPlayback = settingsService.getClickVideoTogglesPlayback();
       });
+
+      // Focus play/pause if navigation is now enabled and controls are visible
+      // (handles case where initState focus attempt failed due to async settings load)
+      if (_videoPlayerNavigationEnabled && _showControls) {
+        _focusPlayPauseIfKeyboardMode();
+      }
 
       // Apply rotation lock setting
       if (_isRotationLocked) {
@@ -388,6 +477,31 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
   void _toggleSubtitles() {
     // Toggle subtitle visibility - this would need to be implemented based on your subtitle system
     // For now, this is a placeholder
+  }
+
+  void _toggleShader() {
+    final shaderService = widget.shaderService;
+    if (shaderService == null || !shaderService.isSupported) return;
+
+    if (shaderService.currentPreset.isEnabled) {
+      // Currently active - disable temporarily
+      shaderService.applyPreset(ShaderPreset.none).then((_) {
+        if (mounted) setState(() {});
+        widget.onShaderChanged?.call();
+      });
+    } else {
+      // Currently off - restore saved preset
+      final shaderProvider = context.read<ShaderProvider>();
+      final saved = shaderProvider.savedPreset;
+      final targetPreset = saved.isEnabled
+          ? saved
+          : ShaderPreset.allPresets.firstWhere((p) => p.isEnabled, orElse: () => ShaderPreset.allPresets[1]);
+      shaderService.applyPreset(targetPreset).then((_) {
+        shaderProvider.setCurrentPreset(targetPreset);
+        if (mounted) setState(() {});
+        widget.onShaderChanged?.call();
+      });
+    }
   }
 
   void _nextAudioTrack() {
@@ -417,15 +531,21 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
+    widget.controlsVisible?.removeListener(_onControlsVisibleExternal);
     widget.hasFirstFrame?.removeListener(_onFirstFrameReady);
     _hideTimer?.cancel();
     _feedbackTimer?.cancel();
-    _resizeDebounceTimer?.cancel();
     _autoSkipTimer?.cancel();
+    _singleTapTimer?.cancel();
     _seekThrottle.cancel();
     _playingSubscription?.cancel();
     _completedSubscription?.cancel();
     _focusNode.dispose();
+    _skipMarkerFocusNode.dispose();
+    // Restore original rate if long-press was active when disposed
+    if (_isLongPressing && _rateBeforeLongPress != null) {
+      widget.player.setRate(_rateBeforeLongPress!);
+    }
     // Remove lifecycle observer
     WidgetsBinding.instance.removeObserver(this);
     // Remove window listener
@@ -483,22 +603,7 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
 
   @override
   void onWindowResize() {
-    // Pause video while resizing to prevent lag
-    if (_resizeDebounceTimer == null && widget.player.state.playing) {
-      _wasPlayingBeforeResize = true;
-      widget.player.pause();
-    }
-
-    // Reset debounce timer - resume when resizing stops
-    _resizeDebounceTimer?.cancel();
-    final slowDuration = tokens(context).slow;
-    _resizeDebounceTimer = Timer(slowDuration, () {
-      if (_wasPlayingBeforeResize && mounted) {
-        widget.player.play();
-      }
-      _wasPlayingBeforeResize = false;
-      _resizeDebounceTimer = null;
-    });
+    // Lag during resize is now handled in native code (glViewport + resize signal handler)
   }
 
   void _startHideTimer() {
@@ -517,11 +622,19 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
           setState(() {
             _showControls = false;
           });
+          // Notify parent of visibility change (for popup positioning)
+          widget.controlsVisible?.value = false;
           // Hide traffic lights on macOS when controls auto-hide
           if (Platform.isMacOS) {
             _updateTrafficLightVisibility();
           }
-          _hideLinuxControlsAfterAnimation();
+          // Restore focus to the main node so keyboard shortcuts keep working
+          // after FocusScope(canRequestFocus: false) ejects child focus.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && !_focusNode.hasFocus) {
+              _focusNode.requestFocus();
+            }
+          });
         }
       });
     }
@@ -534,35 +647,14 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
     }
   }
 
-  /// Show controls immediately on Linux
-  void _showLinuxControls() {
-    if (Platform.isLinux) {
-      widget.player.setControlsVisible(true);
-    }
-  }
-
-  /// Hide controls on Linux after animation completes (250ms delay)
-  void _hideLinuxControlsAfterAnimation() {
-    if (Platform.isLinux) {
-      Future.delayed(const Duration(milliseconds: 250), () {
-        if (mounted && !_showControls) {
-          setState(() {
-            _controlsFullyHidden = true;
-          });
-          widget.player.setControlsVisible(false);
-        }
-      });
-    }
-  }
-
   /// Show controls in response to pointer activity (mouse/trackpad movement).
   void _showControlsFromPointerActivity() {
     if (!_showControls) {
       setState(() {
         _showControls = true;
-        _controlsFullyHidden = false;
       });
-      _showLinuxControls();
+      // Notify parent of visibility change (for popup positioning)
+      widget.controlsVisible?.value = true;
       // On macOS, keep window controls in sync with the overlay
       if (Platform.isMacOS) {
         _updateTrafficLightVisibility();
@@ -571,22 +663,21 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
 
     // Keep the overlay visible while the user is moving the pointer
     _restartHideTimerIfPlaying();
+
+    // Cancel auto-skip when user moves pointer over the player
+    _cancelAutoSkipTimer();
   }
 
   void _toggleControls() {
     setState(() {
       _showControls = !_showControls;
-      if (_showControls) {
-        _controlsFullyHidden = false;
-        _showLinuxControls();
-      }
     });
+    // Notify parent of visibility change (for popup positioning)
+    widget.controlsVisible?.value = _showControls;
+    // Cancel auto-skip on any tap, not just when controls become visible
+    _cancelAutoSkipTimer();
     if (_showControls) {
       _startHideTimer();
-      // Cancel auto-skip when user manually shows controls
-      _cancelAutoSkipTimer();
-    } else {
-      _hideLinuxControlsAfterAnimation();
     }
 
     // On macOS, hide/show traffic lights with controls
@@ -614,16 +705,24 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
   }
 
   void _updateTrafficLightVisibility() async {
-    if (Platform.isMacOS) {
-      if (_showControls) {
-        await WindowManipulator.showCloseButton();
-        await WindowManipulator.showMiniaturizeButton();
-        await WindowManipulator.showZoomButton();
-      } else {
-        await WindowManipulator.hideCloseButton();
-        await WindowManipulator.hideMiniaturizeButton();
-        await WindowManipulator.hideZoomButton();
+    await MacOSWindowService.setTrafficLightsVisible(_showControls);
+  }
+
+  /// Check whether PiP is supported on this device
+  Future<void> _checkPipSupport() async {
+    if (!Platform.isAndroid) {
+      return;
+    }
+
+    try {
+      final supported = await PipService.isSupported();
+      if (mounted) {
+        setState(() {
+          _isPipSupported = supported;
+        });
       }
+    } catch (e) {
+      return;
     }
   }
 
@@ -722,7 +821,8 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
       subtitleSyncOffset: _subtitleSyncOffset,
       isRotationLocked: _isRotationLocked,
       isFullscreen: _isFullscreen,
-      onCycleBoxFitMode: widget.onCycleBoxFitMode,
+      onTogglePIPMode: (_isPipSupported && Platform.isAndroid) ? widget.onTogglePIPMode : null,
+      onCycleBoxFitMode: widget.player.playerType != 'exoplayer' ? widget.onCycleBoxFitMode : null,
       onToggleRotationLock: _toggleRotationLock,
       onToggleFullscreen: _toggleFullscreen,
       onSwitchVersion: _switchMediaVersion,
@@ -737,12 +837,20 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
       onStartAutoHide: _startHideTimer,
       serverId: widget.metadata.serverId ?? '',
       canControl: widget.canControl,
+      shaderService: widget.shaderService,
+      onShaderChanged: widget.onShaderChanged,
     );
   }
 
   void _seekToPreviousChapter() => _seekToChapter(forward: false);
 
   void _seekToNextChapter() => _seekToChapter(forward: true);
+
+  void _seekByTime({required bool forward}) {
+    final delta = Duration(seconds: forward ? _seekTimeSmall : -_seekTimeSmall);
+    final newPosition = seekWithClamping(widget.player, delta);
+    widget.onSeekCompleted?.call(newPosition);
+  }
 
   void _seekToChapter({required bool forward}) {
     if (_chapters.isEmpty) {
@@ -797,10 +905,88 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
     widget.onSeekCompleted?.call(position);
   }
 
+  /// Handle tap in skip zone for desktop mode
+  void _handleTapInSkipZoneDesktop() {
+    if (widget.canControl && _clickVideoTogglesPlayback) {
+      widget.player.playOrPause();
+    }
+
+    _toggleControls();
+  }
+
+  /// Handle tap in skip zone with custom double-tap detection
+  void _handleTapInSkipZone({required bool isForward}) {
+    final now = DateTime.now();
+
+    // Cancel any pending single-tap action
+    _singleTapTimer?.cancel();
+    _singleTapTimer = null;
+
+    // Debounce: ignore taps within 200ms of last skip action
+    // This prevents double-taps from counting as two separate skips
+    if (_lastSkipActionTime != null && now.difference(_lastSkipActionTime!).inMilliseconds < 200) {
+      return;
+    }
+
+    // Check if this qualifies as a double-tap (within 250ms of last tap, same side)
+    final isDoubleTap =
+        _lastSkipTapTime != null &&
+        now.difference(_lastSkipTapTime!).inMilliseconds < 250 &&
+        _lastSkipTapWasForward == isForward;
+
+    // Skip ONLY on detected double-tap (no single-tap-to-add behavior)
+    if (isDoubleTap) {
+      _lastSkipTapTime = null; // Reset to prevent triple-tap chaining
+
+      if (_showDoubleTapFeedback && _lastDoubleTapWasForward == isForward) {
+        // Stacking skip - add to accumulated
+        _handleStackingSkip(isForward: isForward);
+      } else {
+        // First double-tap - initiate skip
+        _handleDoubleTapSkip(isForward: isForward);
+      }
+    } else {
+      // First tap - record timestamp and start timer for single-tap action
+      _lastSkipTapTime = now;
+      _lastSkipTapWasForward = isForward;
+
+      // If no second tap within 250ms, treat as single tap to toggle controls
+      _singleTapTimer = Timer(const Duration(milliseconds: 250), () {
+        if (mounted) {
+          _toggleControls();
+        }
+      });
+    }
+  }
+
+  /// Handle stacking skip - add to accumulated skip when feedback is active
+  void _handleStackingSkip({required bool isForward}) {
+    if (!widget.canControl) return;
+
+    // Add to accumulated skip
+    _accumulatedSkipSeconds += _seekTimeSmall;
+
+    // Calculate and perform seek
+    final delta = Duration(seconds: isForward ? _seekTimeSmall : -_seekTimeSmall);
+    final newPosition = seekWithClamping(widget.player, delta);
+
+    // Notify Watch Together
+    widget.onSeekCompleted?.call(newPosition);
+
+    // Refresh feedback (extends timer, updates display)
+    _showSkipFeedback(isForward: isForward);
+
+    // Record skip time for debounce
+    _lastSkipActionTime = DateTime.now();
+  }
+
   /// Handle double-tap skip forward or backward
   void _handleDoubleTapSkip({required bool isForward}) {
     // Ignore if user cannot control playback
     if (!widget.canControl) return;
+
+    // Reset accumulated skip for new gesture
+    _accumulatedSkipSeconds = _seekTimeSmall;
 
     // Calculate the new position (clamped to valid range)
     final currentPosition = widget.player.state.position;
@@ -817,6 +1003,9 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
 
     // Show visual feedback
     _showSkipFeedback(isForward: isForward);
+
+    // Record skip time for debounce
+    _lastSkipActionTime = DateTime.now();
   }
 
   /// Show animated visual feedback for skip gesture
@@ -832,8 +1021,8 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
     // Capture duration before timer to avoid context access in callback
     final slowDuration = tokens(context).slow;
 
-    // Fade out after delay
-    _feedbackTimer = Timer(const Duration(milliseconds: 500), () {
+    // Fade out after delay (1200ms gives time to see value and continue tapping)
+    _feedbackTimer = Timer(const Duration(milliseconds: 1200), () {
       if (mounted) {
         setState(() {
           _doubleTapFeedbackOpacity = 0.0;
@@ -843,12 +1032,99 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
           if (mounted) {
             setState(() {
               _showDoubleTapFeedback = false;
+              _accumulatedSkipSeconds = 0; // Reset when feedback hides
             });
           }
         });
       }
     });
   }
+
+  /// Handle tap on controls overlay - route to skip zones or toggle controls
+  void _handleControlsOverlayTap(TapUpDetails details, BoxConstraints constraints) {
+    final isMobile = PlatformDetector.isMobile(context);
+
+    if (!isMobile) {
+      final DateTime now = DateTime.now();
+
+      // Always perform the single-click behavior immediately
+      if (widget.canControl && _clickVideoTogglesPlayback) {
+        widget.player.playOrPause();
+      } else {
+        _toggleControls();
+      }
+
+      // Detect double-click
+      final bool isDoubleClick = _lastSkipTapTime != null && now.difference(_lastSkipTapTime!).inMilliseconds < 250;
+
+      if (isDoubleClick) {
+        _lastSkipTapTime = null;
+
+        // Perform desktop double-click action: toggle fullscreen
+        _toggleFullscreen();
+
+        return;
+      }
+
+      // Record this click as a candidate for double-click detection
+      _lastSkipTapTime = now;
+      return;
+    }
+
+    final width = constraints.maxWidth;
+    final height = constraints.maxHeight;
+    final tapX = details.localPosition.dx;
+    final tapY = details.localPosition.dy;
+
+    // Skip zone dimensions (must match the skip zone Positioned widgets)
+    final topExclude = height * 0.15;
+    final bottomExclude = height * 0.15;
+    final leftZoneWidth = width * 0.35;
+
+    // Check if tap is in vertical range for skip zones
+    final inVerticalRange = tapY > topExclude && tapY < (height - bottomExclude);
+
+    if (inVerticalRange) {
+      if (tapX < leftZoneWidth) {
+        // Left skip zone
+        _handleTapInSkipZone(isForward: false);
+        return;
+      } else if (tapX > (width - leftZoneWidth)) {
+        // Right skip zone
+        _handleTapInSkipZone(isForward: true);
+        return;
+      }
+    }
+
+    // Not in skip zone, toggle controls
+    _toggleControls();
+  }
+
+  /// Handle long-press start - activate 2x speed
+  void _handleLongPressStart() {
+    if (!widget.canControl) return; // Respect Watch Together permissions
+
+    setState(() {
+      _isLongPressing = true;
+      _rateBeforeLongPress = widget.player.state.rate;
+      _showSpeedIndicator = true;
+    });
+    widget.player.setRate(2.0);
+  }
+
+  /// Handle long-press end - restore original speed
+  void _handleLongPressEnd() {
+    if (!_isLongPressing) return;
+    widget.player.setRate(_rateBeforeLongPress ?? 1.0);
+    setState(() {
+      _isLongPressing = false;
+      _rateBeforeLongPress = null;
+      _showSpeedIndicator = false;
+    });
+  }
+
+  /// Handle long-press cancel (same as end)
+  void _handleLongPressCancel() => _handleLongPressEnd();
 
   /// Build the visual feedback widget for double-tap skip
   Widget _buildDoubleTapFeedback() {
@@ -858,11 +1134,49 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
         margin: const EdgeInsets.symmetric(horizontal: 60),
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.6), shape: BoxShape.circle),
-        child: AppIcon(
-          _lastDoubleTapWasForward ? getForwardIcon(_seekTimeSmall) : getReplayIcon(_seekTimeSmall),
-          fill: 1,
-          color: Colors.white,
-          size: 48,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AppIcon(
+              _lastDoubleTapWasForward ? Symbols.fast_forward_rounded : Symbols.fast_rewind_rounded,
+              fill: 1,
+              color: Colors.white,
+              size: 32,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '$_accumulatedSkipSeconds${t.settings.secondsShort}',
+              style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Build the visual indicator for long-press 2x speed
+  Widget _buildSpeedIndicator() {
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 20),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.7),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AppIcon(Symbols.fast_forward_rounded, fill: 1, color: Colors.white, size: 16),
+              const SizedBox(width: 4),
+              const Text(
+                '2x',
+                style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -878,9 +1192,9 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
         // Use native macOS fullscreen - titlebar is handled automatically
         // Window listener will update _isFullscreen for UI
         if (isCurrentlyFullscreen) {
-          await WindowManipulator.exitFullscreen();
+          await MacOSWindowService.exitFullscreen();
         } else {
-          await WindowManipulator.enterFullscreen();
+          await MacOSWindowService.enterFullscreen();
         }
       } else {
         // For Windows/Linux, use window_manager
@@ -921,14 +1235,6 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
         key == LogicalKeyboardKey.arrowRight;
   }
 
-  /// Check if a key is a back/escape key
-  bool _isBackKey(LogicalKeyboardKey key) {
-    return key == LogicalKeyboardKey.escape ||
-        key == LogicalKeyboardKey.goBack ||
-        key == LogicalKeyboardKey.browserBack ||
-        key == LogicalKeyboardKey.gameButtonB;
-  }
-
   /// Check if a key is a select/enter key
   bool _isSelectKey(LogicalKeyboardKey key) {
     return key == LogicalKeyboardKey.select ||
@@ -939,7 +1245,15 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
 
   /// Determine if the key event should toggle play/pause based on configured hotkeys.
   bool _isPlayPauseKey(KeyEvent event) {
+    final logicalKey = event.logicalKey;
     final physicalKey = event.physicalKey;
+
+    // Always accept hardware media play/pause keys (Android TV remotes)
+    if (logicalKey == LogicalKeyboardKey.mediaPlayPause ||
+        logicalKey == LogicalKeyboardKey.mediaPlay ||
+        logicalKey == LogicalKeyboardKey.mediaPause) {
+      return true;
+    }
 
     // When the shortcuts service is available, respect the configured play/pause hotkey
     if (_keyboardService != null) {
@@ -950,6 +1264,19 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
 
     // Fallback to defaults while the service is loading
     return physicalKey == PhysicalKeyboardKey.space || physicalKey == PhysicalKeyboardKey.mediaPlayPause;
+  }
+
+  /// Check if a key is a media seek key (Android TV remotes)
+  bool _isMediaSeekKey(LogicalKeyboardKey key) {
+    return key == LogicalKeyboardKey.mediaFastForward ||
+        key == LogicalKeyboardKey.mediaRewind ||
+        key == LogicalKeyboardKey.mediaSkipForward ||
+        key == LogicalKeyboardKey.mediaSkipBackward;
+  }
+
+  /// Check if a key is a media track key (Android TV remotes)
+  bool _isMediaTrackKey(LogicalKeyboardKey key) {
+    return key == LogicalKeyboardKey.mediaTrackNext || key == LogicalKeyboardKey.mediaTrackPrevious;
   }
 
   bool _isPlayPauseActivation(KeyEvent event) {
@@ -974,7 +1301,29 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
       return true; // Event handled, stop propagation
     }
 
-    return false; // Let event continue to other handlers
+    // Fallback: handle all other shortcuts when focus has drifted away
+    // (e.g. after controls auto-hide). The !hasFocus guard prevents
+    // double-handling when the Focus onKeyEvent already processes the event.
+    if (!_focusNode.hasFocus && _keyboardService != null) {
+      final result = _keyboardService!.handleVideoPlayerKeyEvent(
+        event,
+        widget.player,
+        _toggleFullscreen,
+        _toggleSubtitles,
+        _nextAudioTrack,
+        _nextSubtitleTrack,
+        _nextChapter,
+        _previousChapter,
+        onBack: widget.onBack ?? () => Navigator.of(context).pop(true),
+        onToggleShader: _toggleShader,
+      );
+      if (result == KeyEventResult.handled) {
+        _focusNode.requestFocus(); // self-heal focus
+        return true;
+      }
+    }
+
+    return true; // Consume all events while video player is active
   }
 
   /// Show controls and optionally focus play/pause on keyboard input (desktop only)
@@ -982,9 +1331,9 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
     if (!_showControls) {
       setState(() {
         _showControls = true;
-        _controlsFullyHidden = false;
       });
-      _showLinuxControls();
+      // Notify parent of visibility change (for popup positioning)
+      widget.controlsVisible?.value = true;
       if (Platform.isMacOS) {
         _updateTrafficLightVisibility();
       }
@@ -1007,18 +1356,52 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
     }
   }
 
+  /// Show controls and focus timeline on LEFT/RIGHT input (TV/desktop)
+  void _showControlsWithTimelineFocus() {
+    if (!_showControls) {
+      setState(() {
+        _showControls = true;
+      });
+      // Notify parent of visibility change (for popup positioning)
+      widget.controlsVisible?.value = true;
+      if (Platform.isMacOS) {
+        _updateTrafficLightVisibility();
+      }
+    }
+    _startHideTimer();
+
+    // Request focus on timeline after controls are shown
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _desktopControlsKey.currentState?.requestTimelineFocus();
+    });
+  }
+
   /// Hide controls when navigating up from timeline (keyboard mode)
+  /// If skip marker button or Play Next dialog is visible, focus it instead of hiding controls
   void _hideControlsFromKeyboard() {
+    // If skip marker button is visible, focus it instead of hiding controls
+    if (_currentMarker != null) {
+      _skipMarkerFocusNode.requestFocus();
+      return;
+    }
+
+    // If Play Next dialog is visible (focus node provided), focus it instead of hiding controls
+    if (widget.playNextFocusNode != null) {
+      widget.playNextFocusNode!.requestFocus();
+      return;
+    }
+
     if (_showControls) {
       setState(() {
         _showControls = false;
       });
+      // Notify parent of visibility change (for popup positioning)
+      widget.controlsVisible?.value = false;
       // Return focus to the main focus node
       _focusNode.requestFocus();
       if (Platform.isMacOS) {
         _updateTrafficLightVisibility();
       }
-      _hideLinuxControlsAfterAnimation();
     }
   }
 
@@ -1027,326 +1410,400 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
     // Use desktop controls for desktop platforms AND Android TV
     final isMobile = PlatformDetector.isMobile(context) && !PlatformDetector.isTV();
 
-    return Focus(
-      focusNode: _focusNode,
-      autofocus: true,
-      onKeyEvent: (node, event) {
-        // Only handle KeyDown and KeyRepeat events
-        if (!event.isActionable) {
-          return KeyEventResult.ignored;
-        }
+    // Hide ALL controls when in PiP mode (Android only)
+    return ValueListenableBuilder<bool>(
+      valueListenable: _pipService.isPipActive,
+      builder: (context, isInPip, _) {
+        if (isInPip) return const SizedBox.shrink();
+        return Focus(
+          focusNode: _focusNode,
+          autofocus: true,
+          onKeyEvent: (node, event) {
+            final backResult = handleBackKeyAction(event, () {
+              // On Windows/Linux with navigation off, ESC first exits fullscreen
+              if (!_videoPlayerNavigationEnabled && _isFullscreen && (Platform.isWindows || Platform.isLinux)) {
+                _toggleFullscreen();
+                return;
+              }
+              if (!_showControls) {
+                _showControlsWithFocus();
+                return;
+              }
+              // Controls visible - navigate back
+              (widget.onBack ?? () => Navigator.of(context).pop(true))();
+            });
+            if (backResult != KeyEventResult.ignored) {
+              return backResult;
+            }
 
-        // Reset hide timer on any keyboard/controller input when controls are visible
-        if (_showControls) {
-          _restartHideTimerIfPlaying();
-        }
+            // Only handle KeyDown and KeyRepeat events
+            // Consume KeyUp events to prevent them leaking to previous routes
+            if (!event.isActionable) {
+              return KeyEventResult.handled;
+            }
 
-        final key = event.logicalKey;
-        final isPlayPauseKey = _isPlayPauseKey(event);
+            // Reset hide timer on any keyboard/controller input when controls are visible
+            if (_showControls) {
+              _restartHideTimerIfPlaying();
+            }
 
-        // Handle play/pause via focus when navigation is enabled (TV/gamepad)
-        // When navigation is disabled, the global handler (_handleGlobalKeyEvent) handles it
-        if (_videoPlayerNavigationEnabled || isMobile) {
-          if (_isPlayPauseActivation(event)) {
-            widget.player.playOrPause();
-            _showControlsWithFocus(requestFocus: _videoPlayerNavigationEnabled);
-            return KeyEventResult.handled;
-          }
-          // Swallow other play/pause events (e.g., key up/repeat) to prevent focus side effects
-          if (isPlayPauseKey) {
-            return KeyEventResult.handled;
-          }
-        }
+            final key = event.logicalKey;
+            final isPlayPauseKey = _isPlayPauseKey(event);
 
-        // Handle Back/Escape: show controls if hidden, navigate back if visible
-        if (_isBackKey(key)) {
-          if (!_showControls) {
-            _showControlsWithFocus();
-            return KeyEventResult.handled;
-          }
-          // Controls visible - navigate back
-          Navigator.of(context).pop(true);
-          return KeyEventResult.handled;
-        }
+            // Always consume play/pause keys to prevent propagation to background routes
+            // On TV/mobile, handle play/pause here; on desktop, the global handler does it
+            if (isPlayPauseKey) {
+              if (_videoPlayerNavigationEnabled || isMobile) {
+                if (_isPlayPauseActivation(event)) {
+                  widget.player.playOrPause();
+                  _showControlsWithFocus(requestFocus: _videoPlayerNavigationEnabled);
+                }
+              }
+              return KeyEventResult.handled;
+            }
 
-        // Handle Select/Enter when controls are hidden: pause and show controls
-        // Only intercept if this Focus node itself has primary focus (not a descendant)
-        if (_isSelectKey(key) && !_showControls && _focusNode.hasPrimaryFocus) {
-          widget.player.playOrPause();
-          _showControlsWithFocus();
-          return KeyEventResult.handled;
-        }
+            // Handle media seek keys (Android TV remotes)
+            // Uses chapter navigation if chapters are available, otherwise seeks by configured time
+            if (event is KeyDownEvent && _isMediaSeekKey(key)) {
+              if (widget.canControl) {
+                final isForward =
+                    key == LogicalKeyboardKey.mediaFastForward || key == LogicalKeyboardKey.mediaSkipForward;
+                _seekToChapter(forward: isForward);
+              }
+              _showControlsWithFocus(requestFocus: _videoPlayerNavigationEnabled);
+              return KeyEventResult.handled;
+            }
 
-        // On desktop, show controls and focus play/pause on directional input
-        // Only handle navigation if video player navigation is enabled
-        if (!isMobile && _isDirectionalKey(key) && _videoPlayerNavigationEnabled) {
-          // If controls are hidden, show them and focus play/pause
-          if (!_showControls) {
-            _showControlsWithFocus();
-            return KeyEventResult.handled;
-          }
-          // If controls are shown, let the event propagate to the focused control
-          // The DesktopVideoControls will handle navigation
-          return KeyEventResult.ignored;
-        }
+            // Handle next/previous track keys (Android TV remotes)
+            // Uses same behavior as seek keys: chapter navigation or time-based seek
+            if (event is KeyDownEvent && _isMediaTrackKey(key)) {
+              if (widget.canControl) {
+                _seekToChapter(forward: key == LogicalKeyboardKey.mediaTrackNext);
+              }
+              _showControlsWithFocus(requestFocus: _videoPlayerNavigationEnabled);
+              return KeyEventResult.handled;
+            }
 
-        // Pass other events to the keyboard shortcuts service
-        if (_keyboardService == null) return KeyEventResult.ignored;
+            // Handle Select/Enter when controls are hidden: pause and show controls
+            // Only intercept if this Focus node itself has primary focus (not a descendant)
+            if (_isSelectKey(key) && !_showControls && _focusNode.hasPrimaryFocus) {
+              widget.player.playOrPause();
+              _showControlsWithFocus();
+              return KeyEventResult.handled;
+            }
 
-        final result = _keyboardService!.handleVideoPlayerKeyEvent(
-          event,
-          widget.player,
-          _toggleFullscreen,
-          _toggleSubtitles,
-          _nextAudioTrack,
-          _nextSubtitleTrack,
-          _nextChapter,
-          _previousChapter,
-          onBack: widget.onBack ?? () => Navigator.of(context).pop(true),
-        );
-        return result;
-      },
-      child: Listener(
-        behavior: HitTestBehavior.translucent,
-        onPointerHover: (_) => _showControlsFromPointerActivity(),
-        child: MouseRegion(
-          cursor: _showControls ? SystemMouseCursors.basic : SystemMouseCursors.none,
-          onHover: (_) => _showControlsFromPointerActivity(),
-          child: Stack(
-            children: [
-              // Invisible tap detector that always covers the full area
-              Positioned.fill(
-                child: GestureDetector(
-                  onTap: _toggleControls,
-                  behavior: HitTestBehavior.opaque,
-                  child: Container(color: Colors.transparent),
-                ),
-              ),
-              // Middle area double-tap detector for fullscreen (desktop only)
-              // Only covers the clear video area (20% to 80% vertically)
-              if (!isMobile)
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final height = constraints.maxHeight;
-                      final topExclude = height * 0.20; // Top 20%
-                      final bottomExclude = height * 0.20; // Bottom 20%
+            // On desktop/TV, show controls on directional input
+            // LEFT/RIGHT focuses timeline for seeking, UP/DOWN focuses play/pause
+            if (!isMobile && _isDirectionalKey(key) && _videoPlayerNavigationEnabled) {
+              if (!_showControls) {
+                final isHorizontal = key == LogicalKeyboardKey.arrowLeft || key == LogicalKeyboardKey.arrowRight;
+                if (isHorizontal) {
+                  _showControlsWithTimelineFocus();
+                } else {
+                  _showControlsWithFocus();
+                }
+                return KeyEventResult.handled;
+              }
+              // Children (DesktopVideoControls) handle navigation first via their own onKeyEvent.
+              // If we reach here, children already declined the event — consume it to prevent leaking.
+              return KeyEventResult.handled;
+            }
 
-                      return Stack(
-                        children: [
-                          Positioned(
-                            top: topExclude,
-                            left: 0,
-                            right: 0,
-                            bottom: bottomExclude,
-                            child: GestureDetector(
-                              onTap: _toggleControls,
-                              onDoubleTap: _toggleFullscreen,
-                              behavior: HitTestBehavior.translucent,
-                              child: Container(color: Colors.transparent),
-                            ),
-                          ),
-                        ],
-                      );
-                    },
+            // Pass other events to the keyboard shortcuts service
+            if (_keyboardService == null) return KeyEventResult.handled;
+
+            final result = _keyboardService!.handleVideoPlayerKeyEvent(
+              event,
+              widget.player,
+              _toggleFullscreen,
+              _toggleSubtitles,
+              _nextAudioTrack,
+              _nextSubtitleTrack,
+              _nextChapter,
+              _previousChapter,
+              onBack: widget.onBack ?? () => Navigator.of(context).pop(true),
+              onToggleShader: _toggleShader,
+            );
+            // Never return .ignored from fullscreen video — prevent leaking to previous routes
+            return result == KeyEventResult.ignored ? KeyEventResult.handled : result;
+          },
+          child: Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerHover: (_) => _showControlsFromPointerActivity(),
+            child: MouseRegion(
+              cursor: _showControls ? SystemMouseCursors.basic : SystemMouseCursors.none,
+              onHover: (_) => _showControlsFromPointerActivity(),
+              child: Stack(
+                children: [
+                  // Keep-alive: 1px widget that continuously repaints to prevent
+                  // Flutter animations from freezing when the frame clock goes idle
+                  if (Platform.isLinux || Platform.isWindows)
+                    const Positioned(top: 0, left: 0, child: _LinuxKeepAlive()),
+                  // Invisible tap detector that always covers the full area
+                  // Also handles long-press for 2x speed
+                  Positioned.fill(
+                    child: GestureDetector(
+                      onTap: _toggleControls,
+                      onLongPressStart: (_) => _handleLongPressStart(),
+                      onLongPressEnd: (_) => _handleLongPressEnd(),
+                      onLongPressCancel: _handleLongPressCancel,
+                      behavior: HitTestBehavior.opaque,
+                      child: Container(color: Colors.transparent),
+                    ),
                   ),
-                ),
-              // Mobile double-tap zones for skip forward/backward
-              if (isMobile)
-                Positioned.fill(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final height = constraints.maxHeight;
-                      final width = constraints.maxWidth;
-                      final topExclude = height * 0.15; // Exclude top 15% (top bar)
-                      final bottomExclude = height * 0.15; // Exclude bottom 15% (seek slider)
-                      final leftZoneWidth = width * 0.35; // Left 35%
+                  // Middle area double-tap detector for fullscreen (desktop only)
+                  // Only covers the clear video area (20% to 80% vertically)
+                  if (!isMobile)
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final height = constraints.maxHeight;
+                          final topExclude = height * 0.20; // Top 20%
+                          final bottomExclude = height * 0.20; // Bottom 20%
 
-                      return Stack(
-                        children: [
-                          // Left zone - skip backward
-                          Positioned(
-                            left: 0,
-                            top: topExclude,
-                            bottom: bottomExclude,
-                            width: leftZoneWidth,
-                            child: GestureDetector(
-                              onTap: _toggleControls,
-                              onDoubleTap: () => _handleDoubleTapSkip(isForward: false),
-                              behavior: HitTestBehavior.translucent,
-                              child: Container(color: Colors.transparent),
-                            ),
-                          ),
-                          // Right zone - skip forward
-                          Positioned(
-                            right: 0,
-                            top: topExclude,
-                            bottom: bottomExclude,
-                            width: leftZoneWidth,
-                            child: GestureDetector(
-                              onTap: _toggleControls,
-                              onDoubleTap: () => _handleDoubleTapSkip(isForward: true),
-                              behavior: HitTestBehavior.translucent,
-                              child: Container(color: Colors.transparent),
-                            ),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                ),
-              // Custom controls overlay - use AnimatedOpacity to keep widget tree alive
-              // On Linux, use Offstage after fade completes to fully hide
-              // Positioned AFTER double-tap zones so controls receive taps first
-              Positioned.fill(
-                child: Offstage(
-                  offstage: Platform.isLinux && _controlsFullyHidden,
-                  child: IgnorePointer(
-                    ignoring: !_showControls,
-                    child: FocusScope(
-                      // Prevent focus from entering controls when hidden
-                      canRequestFocus: _showControls,
-                      child: AnimatedOpacity(
-                        opacity: _showControls ? 1.0 : 0.0,
-                        duration: const Duration(milliseconds: 200),
-                        child: GestureDetector(
-                          onTap: _toggleControls,
-                          behavior: HitTestBehavior.deferToChild,
-                          child: ValueListenableBuilder<bool>(
-                            valueListenable: widget.hasFirstFrame ?? ValueNotifier(true),
-                            builder: (context, hasFrame, child) {
-                              return Container(
-                                decoration: BoxDecoration(
-                                  // Use solid black when loading, gradient when loaded
-                                  color: hasFrame ? null : Colors.black,
-                                  gradient: hasFrame
-                                      ? LinearGradient(
-                                          begin: Alignment.topCenter,
-                                          end: Alignment.bottomCenter,
-                                          colors: [
-                                            Colors.black.withValues(alpha: 0.7),
-                                            Colors.transparent,
-                                            Colors.transparent,
-                                            Colors.black.withValues(alpha: 0.7),
-                                          ],
-                                          stops: const [0.0, 0.2, 0.8, 1.0],
-                                        )
-                                      : null,
+                          return Stack(
+                            children: [
+                              Positioned(
+                                top: topExclude,
+                                left: 0,
+                                right: 0,
+                                bottom: bottomExclude,
+                                child: GestureDetector(
+                                  onTap: _handleTapInSkipZoneDesktop,
+                                  onDoubleTap: _toggleFullscreen,
+                                  behavior: HitTestBehavior.translucent,
+                                  child: Container(color: Colors.transparent),
                                 ),
-                                child: child,
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                  // Mobile double-tap zones for skip forward/backward
+                  if (isMobile)
+                    Positioned.fill(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final height = constraints.maxHeight;
+                          final width = constraints.maxWidth;
+                          final topExclude = height * 0.15; // Exclude top 15% (top bar)
+                          final bottomExclude = height * 0.15; // Exclude bottom 15% (seek slider)
+                          final leftZoneWidth = width * 0.35; // Left 35%
+
+                          return Stack(
+                            children: [
+                              // Left zone - skip backward (custom double-tap detection)
+                              Positioned(
+                                left: 0,
+                                top: topExclude,
+                                bottom: bottomExclude,
+                                width: leftZoneWidth,
+                                child: GestureDetector(
+                                  onTap: () => _handleTapInSkipZone(isForward: false),
+                                  onLongPressStart: (_) => _handleLongPressStart(),
+                                  onLongPressEnd: (_) => _handleLongPressEnd(),
+                                  onLongPressCancel: _handleLongPressCancel,
+                                  behavior: HitTestBehavior.opaque,
+                                  child: Container(color: Colors.transparent),
+                                ),
+                              ),
+                              // Right zone - skip forward (custom double-tap detection)
+                              Positioned(
+                                right: 0,
+                                top: topExclude,
+                                bottom: bottomExclude,
+                                width: leftZoneWidth,
+                                child: GestureDetector(
+                                  onTap: () => _handleTapInSkipZone(isForward: true),
+                                  onLongPressStart: (_) => _handleLongPressStart(),
+                                  onLongPressEnd: (_) => _handleLongPressEnd(),
+                                  onLongPressCancel: _handleLongPressCancel,
+                                  behavior: HitTestBehavior.opaque,
+                                  child: Container(color: Colors.transparent),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                  // Custom controls overlay
+                  // Positioned AFTER double-tap zones so controls receive taps first
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      ignoring: !_showControls,
+                      child: FocusScope(
+                        // Prevent focus from entering controls when hidden
+                        canRequestFocus: _showControls,
+                        child: AnimatedOpacity(
+                          opacity: _showControls ? 1.0 : 0.0,
+                          duration: const Duration(milliseconds: 200),
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              return GestureDetector(
+                                onTapUp: (details) => _handleControlsOverlayTap(details, constraints),
+                                onLongPressStart: (_) => _handleLongPressStart(),
+                                onLongPressEnd: (_) => _handleLongPressEnd(),
+                                onLongPressCancel: _handleLongPressCancel,
+                                behavior: HitTestBehavior.deferToChild,
+                                child: ValueListenableBuilder<bool>(
+                                  valueListenable: widget.hasFirstFrame ?? ValueNotifier(true),
+                                  builder: (context, hasFrame, child) {
+                                    return Container(
+                                      decoration: BoxDecoration(
+                                        // Use solid black when loading, gradient when loaded
+                                        color: hasFrame ? null : Colors.black,
+                                        gradient: hasFrame
+                                            ? LinearGradient(
+                                                begin: Alignment.topCenter,
+                                                end: Alignment.bottomCenter,
+                                                colors: [
+                                                  Colors.black.withValues(alpha: 0.7),
+                                                  Colors.transparent,
+                                                  Colors.transparent,
+                                                  Colors.black.withValues(alpha: 0.7),
+                                                ],
+                                                stops: const [0.0, 0.2, 0.8, 1.0],
+                                              )
+                                            : null,
+                                      ),
+                                      child: child,
+                                    );
+                                  },
+                                  child: isMobile
+                                      ? Listener(
+                                          behavior: HitTestBehavior.translucent,
+                                          onPointerDown: (_) => _restartHideTimerIfPlaying(),
+                                          child: MobileVideoControls(
+                                            player: widget.player,
+                                            metadata: widget.metadata,
+                                            chapters: _chapters,
+                                            chaptersLoaded: _chaptersLoaded,
+                                            seekTimeSmall: _seekTimeSmall,
+                                            trackChapterControls: _buildTrackChapterControlsWidget(),
+                                            onSeek: _throttledSeek,
+                                            onSeekEnd: _finalizeSeek,
+                                            onSeekCompleted: widget.onSeekCompleted,
+                                            onPlayPause: () {}, // Not used, handled internally
+                                            onCancelAutoHide: () => _hideTimer?.cancel(),
+                                            onStartAutoHide: _startHideTimer,
+                                            onBack: widget.onBack,
+                                            onNext: widget.onNext,
+                                            onPrevious: widget.onPrevious,
+                                            canControl: widget.canControl,
+                                            hasFirstFrame: widget.hasFirstFrame,
+                                            thumbnailUrlBuilder: widget.thumbnailUrlBuilder,
+                                          ),
+                                        )
+                                      : Listener(
+                                          behavior: HitTestBehavior.translucent,
+                                          onPointerDown: (_) => _restartHideTimerIfPlaying(),
+                                          child: DesktopVideoControls(
+                                            key: _desktopControlsKey,
+                                            player: widget.player,
+                                            metadata: widget.metadata,
+                                            onNext: widget.onNext,
+                                            onPrevious: widget.onPrevious,
+                                            chapters: _chapters,
+                                            chaptersLoaded: _chaptersLoaded,
+                                            seekTimeSmall: _seekTimeSmall,
+                                            onSeekToPreviousChapter: _seekToPreviousChapter,
+                                            onSeekToNextChapter: _seekToNextChapter,
+                                            onSeekBackward: () => _seekByTime(forward: false),
+                                            onSeekForward: () => _seekByTime(forward: true),
+                                            onSeek: _throttledSeek,
+                                            onSeekEnd: _finalizeSeek,
+                                            getReplayIcon: getReplayIcon,
+                                            getForwardIcon: getForwardIcon,
+                                            onFocusActivity: _restartHideTimerIfPlaying,
+                                            onHideControls: _hideControlsFromKeyboard,
+                                            // Track chapter controls data
+                                            availableVersions: widget.availableVersions,
+                                            selectedMediaIndex: widget.selectedMediaIndex,
+                                            boxFitMode: widget.boxFitMode,
+                                            audioSyncOffset: _audioSyncOffset,
+                                            subtitleSyncOffset: _subtitleSyncOffset,
+                                            isFullscreen: _isFullscreen,
+                                            isAlwaysOnTop: _isAlwaysOnTop,
+                                            onTogglePIPMode: (_isPipSupported && Platform.isAndroid)
+                                                ? widget.onTogglePIPMode
+                                                : null,
+                                            onCycleBoxFitMode: widget.player.playerType != 'exoplayer'
+                                                ? widget.onCycleBoxFitMode
+                                                : null,
+                                            onToggleFullscreen: _toggleFullscreen,
+                                            onToggleAlwaysOnTop: _toggleAlwaysOnTop,
+                                            onSwitchVersion: _switchMediaVersion,
+                                            onAudioTrackChanged: widget.onAudioTrackChanged,
+                                            onSubtitleTrackChanged: widget.onSubtitleTrackChanged,
+                                            onLoadSeekTimes: () async {
+                                              if (mounted) {
+                                                await _loadSeekTimes();
+                                              }
+                                            },
+                                            onCancelAutoHide: () => _hideTimer?.cancel(),
+                                            onStartAutoHide: _startHideTimer,
+                                            serverId: widget.metadata.serverId ?? '',
+                                            onBack: widget.onBack,
+                                            canControl: widget.canControl,
+                                            hasFirstFrame: widget.hasFirstFrame,
+                                            shaderService: widget.shaderService,
+                                            onShaderChanged: widget.onShaderChanged,
+                                            thumbnailUrlBuilder: widget.thumbnailUrlBuilder,
+                                          ),
+                                        ),
+                                ),
                               );
                             },
-                            child: isMobile
-                                ? Listener(
-                                    behavior: HitTestBehavior.translucent,
-                                    onPointerDown: (_) => _restartHideTimerIfPlaying(),
-                                    child: MobileVideoControls(
-                                      player: widget.player,
-                                      metadata: widget.metadata,
-                                      chapters: _chapters,
-                                      chaptersLoaded: _chaptersLoaded,
-                                      seekTimeSmall: _seekTimeSmall,
-                                      trackChapterControls: _buildTrackChapterControlsWidget(),
-                                      onSeek: _throttledSeek,
-                                      onSeekEnd: _finalizeSeek,
-                                      onSeekCompleted: widget.onSeekCompleted,
-                                      onPlayPause: () {}, // Not used, handled internally
-                                      onCancelAutoHide: () => _hideTimer?.cancel(),
-                                      onStartAutoHide: _startHideTimer,
-                                      onBack: widget.onBack,
-                                      onNext: widget.onNext,
-                                      onPrevious: widget.onPrevious,
-                                      canControl: widget.canControl,
-                                      hasFirstFrame: widget.hasFirstFrame,
-                                    ),
-                                  )
-                                : Listener(
-                                    behavior: HitTestBehavior.translucent,
-                                    onPointerDown: (_) => _restartHideTimerIfPlaying(),
-                                    child: DesktopVideoControls(
-                                      key: _desktopControlsKey,
-                                      player: widget.player,
-                                      metadata: widget.metadata,
-                                      onNext: widget.onNext,
-                                      onPrevious: widget.onPrevious,
-                                      chapters: _chapters,
-                                      chaptersLoaded: _chaptersLoaded,
-                                      seekTimeSmall: _seekTimeSmall,
-                                      onSeekToPreviousChapter: _seekToPreviousChapter,
-                                      onSeekToNextChapter: _seekToNextChapter,
-                                      onSeek: _throttledSeek,
-                                      onSeekEnd: _finalizeSeek,
-                                      getReplayIcon: getReplayIcon,
-                                      getForwardIcon: getForwardIcon,
-                                      onFocusActivity: _restartHideTimerIfPlaying,
-                                      onHideControls: _hideControlsFromKeyboard,
-                                      // Track chapter controls data
-                                      availableVersions: widget.availableVersions,
-                                      selectedMediaIndex: widget.selectedMediaIndex,
-                                      boxFitMode: widget.boxFitMode,
-                                      audioSyncOffset: _audioSyncOffset,
-                                      subtitleSyncOffset: _subtitleSyncOffset,
-                                      isFullscreen: _isFullscreen,
-                                      isAlwaysOnTop: _isAlwaysOnTop,
-                                      onCycleBoxFitMode: widget.onCycleBoxFitMode,
-                                      onToggleFullscreen: _toggleFullscreen,
-                                      onToggleAlwaysOnTop: _toggleAlwaysOnTop,
-                                      onSwitchVersion: _switchMediaVersion,
-                                      onAudioTrackChanged: widget.onAudioTrackChanged,
-                                      onSubtitleTrackChanged: widget.onSubtitleTrackChanged,
-                                      onLoadSeekTimes: () async {
-                                        if (mounted) {
-                                          await _loadSeekTimes();
-                                        }
-                                      },
-                                      onCancelAutoHide: () => _hideTimer?.cancel(),
-                                      onStartAutoHide: _startHideTimer,
-                                      serverId: widget.metadata.serverId ?? '',
-                                      onBack: widget.onBack,
-                                      canControl: widget.canControl,
-                                      hasFirstFrame: widget.hasFirstFrame,
-                                    ),
-                                  ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                ),
-              ),
-              // Visual feedback overlay for double-tap
-              if (isMobile && _showDoubleTapFeedback)
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: AnimatedOpacity(
-                      opacity: _doubleTapFeedbackOpacity,
-                      duration: tokens(context).slow,
-                      child: _buildDoubleTapFeedback(),
+                  // Visual feedback overlay for double-tap
+                  if (isMobile && _showDoubleTapFeedback)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: AnimatedOpacity(
+                          opacity: _doubleTapFeedbackOpacity,
+                          duration: tokens(context).slow,
+                          child: _buildDoubleTapFeedback(),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-              // Skip intro/credits button
-              if (_currentMarker != null)
-                Positioned(
-                  right: 24,
-                  bottom: isMobile ? 80 : 115,
-                  child: AnimatedOpacity(opacity: 1.0, duration: tokens(context).slow, child: _buildSkipMarkerButton()),
-                ),
-              // Performance overlay (top-left)
-              if (_showPerformanceOverlay)
-                Positioned(
-                  top: isMobile ? 60 : 16,
-                  left: 16,
-                  child: IgnorePointer(child: PlayerPerformanceOverlay(player: widget.player)),
-                ),
-            ],
+                  // Speed indicator overlay for long-press 2x
+                  if (_showSpeedIndicator) Positioned.fill(child: IgnorePointer(child: _buildSpeedIndicator())),
+                  // Skip intro/credits button
+                  if (_currentMarker != null)
+                    AnimatedPositioned(
+                      duration: const Duration(milliseconds: 200),
+                      curve: Curves.easeInOut,
+                      right: 24,
+                      bottom: _showControls ? (isMobile ? 80 : 115) : 24,
+                      child: AnimatedOpacity(
+                        opacity: 1.0,
+                        duration: tokens(context).slow,
+                        child: _buildSkipMarkerButton(),
+                      ),
+                    ),
+                  // Performance overlay (top-left)
+                  if (_showPerformanceOverlay)
+                    Positioned(
+                      top: isMobile ? 60 : 16,
+                      left: 16,
+                      child: IgnorePointer(child: PlayerPerformanceOverlay(player: widget.player)),
+                    ),
+                ],
+              ),
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -1370,65 +1827,84 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
         : baseButtonText;
     final IconData buttonIcon = showNextEpisode ? Symbols.skip_next_rounded : Symbols.fast_forward_rounded;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () {
-          if (isAutoSkipActive) {
-            _cancelAutoSkipTimer();
-          }
-          // Always perform the skip action when tapped
-          _performAutoSkip();
-        },
-        borderRadius: BorderRadius.circular(tokens(context).radiusSm),
-        child: Stack(
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.9),
-                borderRadius: BorderRadius.circular(tokens(context).radiusSm),
-                boxShadow: [
-                  BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 2)),
-                ],
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    buttonText,
-                    style: const TextStyle(color: Colors.black, fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(width: 8),
-                  AppIcon(buttonIcon, fill: 1, color: Colors.black, size: 20),
-                ],
-              ),
-            ),
-            // Progress indicator overlay
-            if (isAutoSkipActive && shouldShowAutoSkip)
-              Positioned.fill(
-                child: ClipRRect(
+    return FocusableWrapper(
+      focusNode: _skipMarkerFocusNode,
+      onSelect: () {
+        if (isAutoSkipActive) {
+          _cancelAutoSkipTimer();
+        }
+        _performAutoSkip();
+      },
+      borderRadius: tokens(context).radiusSm,
+      useBackgroundFocus: true,
+      autoScroll: false,
+      onKeyEvent: (node, event) {
+        // DOWN arrow returns focus to play/pause button
+        if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.arrowDown) {
+          _desktopControlsKey.currentState?.requestPlayPauseFocus();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            if (isAutoSkipActive) {
+              _cancelAutoSkipTimer();
+            }
+            _performAutoSkip();
+          },
+          borderRadius: BorderRadius.circular(tokens(context).radiusSm),
+          child: Stack(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.9),
                   borderRadius: BorderRadius.circular(tokens(context).radiusSm),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        flex: (_autoSkipProgress * 100).round(),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.blue.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(tokens(context).radiusSm),
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        flex: ((1.0 - _autoSkipProgress) * 100).round(),
-                        child: Container(decoration: const BoxDecoration(color: Colors.transparent)),
-                      ),
-                    ],
-                  ),
+                  boxShadow: [
+                    BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 2)),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      buttonText,
+                      style: const TextStyle(color: Colors.black, fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(width: 8),
+                    AppIcon(buttonIcon, fill: 1, color: Colors.black, size: 20),
+                  ],
                 ),
               ),
-          ],
+              // Progress indicator overlay
+              if (isAutoSkipActive && shouldShowAutoSkip)
+                Positioned.fill(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(tokens(context).radiusSm),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          flex: (_autoSkipProgress * 100).round(),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.blue.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(tokens(context).radiusSm),
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          flex: ((1.0 - _autoSkipProgress) * 100).round(),
+                          child: Container(decoration: const BoxDecoration(color: Colors.transparent)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -1477,5 +1953,50 @@ class _PlexVideoControlsState extends State<PlexVideoControls> with WindowListen
         showErrorSnackBar(context, t.messages.errorLoading(error: e.toString()));
       }
     }
+  }
+}
+
+/// A 1x1 pixel widget that continuously repaints to keep Flutter's frame clock active on Linux.
+/// This prevents animations from freezing when GTK's frame clock goes idle.
+class _LinuxKeepAlive extends StatefulWidget {
+  const _LinuxKeepAlive();
+
+  @override
+  State<_LinuxKeepAlive> createState() => _LinuxKeepAliveState();
+}
+
+class _LinuxKeepAliveState extends State<_LinuxKeepAlive> {
+  Timer? _timer;
+  int _tick = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // Repaint every 100ms to keep Flutter's frame scheduler active
+    _timer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (mounted) {
+        setState(() {
+          _tick++;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Use _tick to force rebuild, render a 1x1 transparent pixel
+    return SizedBox(
+      width: 1,
+      height: 1,
+      child: ColoredBox(
+        color: Color.fromRGBO(0, 0, 0, _tick % 2 == 0 ? 0.1 : 0.2), // Alternate alpha
+      ),
+    );
   }
 }

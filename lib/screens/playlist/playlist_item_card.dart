@@ -12,13 +12,18 @@ import '../../widgets/plex_optimized_image.dart';
 
 /// Custom list item widget for playlist items
 /// Shows drag handle, poster, title/metadata, duration, and remove button
-class PlaylistItemCard extends StatefulWidget {
+class PlaylistItemCard extends StatelessWidget {
   final PlexMetadata item;
   final int index;
   final VoidCallback onRemove;
   final VoidCallback? onTap;
   final void Function(String ratingKey)? onRefresh;
   final bool canReorder; // Whether drag handle should be shown
+
+  // Focus state for keyboard/D-pad navigation
+  final bool isFocused;
+  final int? focusedColumn; // 0=row, 1=drag handle, 2=remove button
+  final bool isMoving; // Whether this item is being moved/reordered
 
   const PlaylistItemCard({
     super.key,
@@ -28,38 +33,77 @@ class PlaylistItemCard extends StatefulWidget {
     this.onTap,
     this.onRefresh,
     this.canReorder = true,
+    this.isFocused = false,
+    this.focusedColumn,
+    this.isMoving = false,
   });
 
   @override
-  State<PlaylistItemCard> createState() => _PlaylistItemCardState();
-}
-
-class _PlaylistItemCardState extends State<PlaylistItemCard> {
-  final _contextMenuKey = GlobalKey<MediaContextMenuState>();
-
-  @override
   Widget build(BuildContext context) {
-    final item = widget.item;
+    final colorScheme = Theme.of(context).colorScheme;
+
+    // Determine if row is focused (main content area)
+    final isRowFocused = isFocused && focusedColumn == 0;
+
+    // Focus states for individual elements
+    final isDragHandleFocused = isFocused && focusedColumn == 1;
+    final isRemoveButtonFocused = isFocused && focusedColumn == 2;
+
+    // Determine card styling based on focus/move state
+    Color? cardColor;
+    ShapeBorder? cardShape;
+    if (isMoving) {
+      cardColor = colorScheme.primaryContainer;
+    } else if (isRowFocused) {
+      // Row is focused - use visible border like FocusableWrapper
+      cardColor = colorScheme.surfaceContainerHighest;
+      cardShape = RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: colorScheme.primary, width: 2.5),
+      );
+    }
+
     return MediaContextMenu(
-      key: _contextMenuKey,
       item: item,
-      onRefresh: widget.onRefresh,
-      onTap: widget.onTap,
+      onRefresh: onRefresh,
+      onTap: onTap,
       child: Card(
         margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        color: cardColor,
+        shape: cardShape,
         child: InkWell(
-          onTap: widget.onTap,
+          onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.all(8.0),
             child: Row(
               children: [
                 // Drag handle (if reorderable)
-                if (widget.canReorder)
-                  ReorderableDragStartListener(
-                    index: widget.index,
-                    child: const Padding(
-                      padding: EdgeInsets.only(right: 12),
-                      child: AppIcon(Symbols.drag_indicator_rounded, fill: 1, color: Colors.grey),
+                // Wrapped in GestureDetector to consume long-press and prevent context menu
+                if (canReorder)
+                  GestureDetector(
+                    onLongPress: () {},
+                    child: ReorderableDragStartListener(
+                      index: index,
+                      child: Container(
+                        color: Colors.transparent,
+                        height: 90,
+                        padding: const EdgeInsets.only(right: 4),
+                        alignment: Alignment.center,
+                        child: Container(
+                          padding: const EdgeInsets.fromLTRB(2, 8, 6, 8),
+                          decoration: isDragHandleFocused
+                              ? BoxDecoration(
+                                  color: colorScheme.primaryContainer,
+                                  borderRadius: BorderRadius.circular(8),
+                                )
+                              : null,
+                          child: AppIcon(
+                            isMoving ? Symbols.swap_vert_rounded : Symbols.drag_indicator_rounded,
+                            fill: 1,
+                            color: (isMoving || isDragHandleFocused) ? colorScheme.primary : Colors.grey,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
 
@@ -111,11 +155,16 @@ class _PlaylistItemCardState extends State<PlaylistItemCard> {
                 const SizedBox(width: 8),
 
                 // Remove button
-                IconButton(
-                  icon: const AppIcon(Symbols.close_rounded, fill: 1, size: 20),
-                  onPressed: widget.onRemove,
-                  tooltip: t.playlists.removeItem,
-                  color: Colors.grey[400],
+                Container(
+                  decoration: isRemoveButtonFocused
+                      ? BoxDecoration(color: colorScheme.primaryContainer, borderRadius: BorderRadius.circular(20))
+                      : null,
+                  child: IconButton(
+                    icon: const AppIcon(Symbols.close_rounded, fill: 1, size: 20),
+                    onPressed: onRemove,
+                    tooltip: t.playlists.removeItem,
+                    color: isRemoveButtonFocused ? colorScheme.primary : Colors.grey[400],
+                  ),
                 ),
               ],
             ),
@@ -127,11 +176,11 @@ class _PlaylistItemCardState extends State<PlaylistItemCard> {
 
   /// Get the correct PlexClient for this item's server
   PlexClient _getClientForItem(BuildContext context) {
-    return context.getClientForServer(widget.item.serverId!);
+    return context.getClientForServer(item.serverId!);
   }
 
   Widget _buildPosterImage(BuildContext context) {
-    final posterUrl = widget.item.posterThumb();
+    final posterUrl = item.posterThumb();
     return ClipRRect(
       borderRadius: BorderRadius.circular(6),
       child: PlexOptimizedImage.poster(
@@ -156,7 +205,6 @@ class _PlaylistItemCardState extends State<PlaylistItemCard> {
   }
 
   String _buildSubtitle() {
-    final item = widget.item;
     final itemType = item.type.toLowerCase();
 
     if (itemType == 'episode') {

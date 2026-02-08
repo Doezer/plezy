@@ -1,17 +1,19 @@
 import 'dart:convert';
 import 'package:flutter/services.dart';
-import 'package:hotkey_manager/hotkey_manager.dart';
+import '../models/hotkey_model.dart';
 import 'package:plezy/utils/app_logger.dart';
 import '../i18n/strings.g.dart';
 import '../models/mpv_config_models.dart';
 import 'base_shared_preferences_service.dart';
 import '../utils/platform_detector.dart';
 
-enum ThemeMode { system, light, dark }
+enum ThemeMode { system, light, dark, oled }
 
 enum LibraryDensity { compact, normal, comfortable }
 
 enum ViewMode { grid, list }
+
+enum EpisodePosterMode { seriesPoster, seasonPoster, episodeThumbnail }
 
 class SettingsService extends BaseSharedPreferencesService {
   static const String _keyThemeMode = 'theme_mode';
@@ -25,11 +27,14 @@ class SettingsService extends BaseSharedPreferencesService {
   static const String _keyPreferredAudioCodec = 'preferred_audio_codec';
   static const String _keyLibraryDensity = 'library_density';
   static const String _keyViewMode = 'view_mode';
-  static const String _keyUseSeasonPoster = 'use_season_poster';
+  static const String _keyUseSeasonPoster = 'use_season_poster'; // Legacy key for migration
+  static const String _keyEpisodePosterMode = 'episode_poster_mode';
   static const String _keySeekTimeSmall = 'seek_time_small';
   static const String _keySeekTimeLarge = 'seek_time_large';
   static const String _keyMediaVersionPreferences = 'media_version_preferences';
   static const String _keyShowHeroSection = 'show_hero_section';
+  static const String _keyUseGlobalHubs = 'use_global_hubs';
+  static const String _keyShowServerNameOnHubs = 'show_server_name_on_hubs';
   static const String _keySleepTimerDuration = 'sleep_timer_duration';
   static const String _keyAudioSyncOffset = 'audio_sync_offset';
   static const String _keySubtitleSyncOffset = 'subtitle_sync_offset';
@@ -43,6 +48,7 @@ class SettingsService extends BaseSharedPreferencesService {
   static const String _keySubtitleBackgroundOpacity = 'subtitle_background_opacity';
   static const String _keyAppLocale = 'app_locale';
   static const String _keyRememberTrackSelections = 'remember_track_selections';
+  static const String _keyClickVideoTogglesPlayback = 'click_video_toggles_playback';
   static const String _keyAutoSkipIntro = 'auto_skip_intro';
   static const String _keyAutoSkipCredits = 'auto_skip_credits';
   static const String _keyAutoSkipDelay = 'auto_skip_delay';
@@ -54,6 +60,15 @@ class SettingsService extends BaseSharedPreferencesService {
   static const String _keyMpvConfigEntries = 'mpv_config_entries';
   static const String _keyMpvConfigPresets = 'mpv_config_presets';
   static const String _keyMaxVolume = 'max_volume';
+  static const String _keyEnableDiscordRPC = 'enable_discord_rpc';
+  static const String _keyMatchContentFrameRate = 'match_content_frame_rate';
+  static const String _keyDefaultPlaybackSpeed = 'default_playback_speed';
+  static const String _keyAutoPlayNextEpisode = 'auto_play_next_episode';
+  static const String _keyUseExoPlayer = 'use_exoplayer';
+  static const String _keyAlwaysKeepSidebarOpen = 'always_keep_sidebar_open';
+  static const String _keyShowUnwatchedCount = 'show_unwatched_count';
+  static const String _keyGlobalShaderPreset = 'global_shader_preset';
+  static const String _keyRequireProfileSelectionOnOpen = 'require_profile_selection_on_open';
 
   SettingsService._();
 
@@ -74,6 +89,11 @@ class SettingsService extends BaseSharedPreferencesService {
   }
 
   ThemeMode getThemeMode() {
+    final stored = prefs.getString(_keyThemeMode);
+    if (stored == null) {
+      // Default to OLED on Android TV, system elsewhere
+      return TvDetectionService.isTVSync() ? ThemeMode.oled : ThemeMode.system;
+    }
     return _getEnumValue(_keyThemeMode, ThemeMode.values, ThemeMode.system);
   }
 
@@ -151,13 +171,23 @@ class SettingsService extends BaseSharedPreferencesService {
     return _getEnumValue(_keyViewMode, ViewMode.values, ViewMode.grid);
   }
 
-  // Use Season Poster
-  Future<void> setUseSeasonPoster(bool enabled) async {
-    await prefs.setBool(_keyUseSeasonPoster, enabled);
+  // Episode Poster Mode
+  Future<void> setEpisodePosterMode(EpisodePosterMode mode) async {
+    await prefs.setString(_keyEpisodePosterMode, mode.name);
   }
 
-  bool getUseSeasonPoster() {
-    return prefs.getBool(_keyUseSeasonPoster) ?? false; // Default: false (use series poster)
+  EpisodePosterMode getEpisodePosterMode() {
+    // Migration: check old boolean key first
+    final legacyValue = prefs.getBool(_keyUseSeasonPoster);
+    if (legacyValue != null) {
+      // Migrate old setting: true = seasonPoster, false = seriesPoster
+      final migratedMode = legacyValue ? EpisodePosterMode.seasonPoster : EpisodePosterMode.seriesPoster;
+      // Clear old key and save new format (fire and forget)
+      prefs.remove(_keyUseSeasonPoster);
+      prefs.setString(_keyEpisodePosterMode, migratedMode.name);
+      return migratedMode;
+    }
+    return _getEnumValue(_keyEpisodePosterMode, EpisodePosterMode.values, EpisodePosterMode.episodeThumbnail);
   }
 
   // Show Hero Section
@@ -167,6 +197,24 @@ class SettingsService extends BaseSharedPreferencesService {
 
   bool getShowHeroSection() {
     return prefs.getBool(_keyShowHeroSection) ?? true; // Default: true (show hero section)
+  }
+
+  // Use Global Hubs (true = global /hubs endpoint, false = per-library hubs)
+  Future<void> setUseGlobalHubs(bool enabled) async {
+    await prefs.setBool(_keyUseGlobalHubs, enabled);
+  }
+
+  bool getUseGlobalHubs() {
+    return prefs.getBool(_keyUseGlobalHubs) ?? true; // Default: true (use global hubs like official Plex)
+  }
+
+  // Show Server Name on Hubs (false = only on duplicates, true = always)
+  Future<void> setShowServerNameOnHubs(bool enabled) async {
+    await prefs.setBool(_keyShowServerNameOnHubs, enabled);
+  }
+
+  bool getShowServerNameOnHubs() {
+    return prefs.getBool(_keyShowServerNameOnHubs) ?? false; // Default: false (only show on duplicates)
   }
 
   // Seek Time Small (in seconds)
@@ -249,7 +297,7 @@ class SettingsService extends BaseSharedPreferencesService {
   }
 
   int getSubtitleFontSize() {
-    return prefs.getInt(_keySubtitleFontSize) ?? 55;
+    return prefs.getInt(_keySubtitleFontSize) ?? 38;
   }
 
   // Text Color (hex format #RRGGBB, default white)
@@ -317,6 +365,8 @@ class SettingsService extends BaseSharedPreferencesService {
       'speed_increase': 'Plus',
       'speed_decrease': 'Minus',
       'speed_reset': 'R',
+      'sub_seek_next': 'Ctrl+Right',
+      'sub_seek_prev': 'Ctrl+Left',
     };
   }
 
@@ -340,6 +390,9 @@ class SettingsService extends BaseSharedPreferencesService {
       'speed_increase': HotKey(key: PhysicalKeyboardKey.equal),
       'speed_decrease': HotKey(key: PhysicalKeyboardKey.minus),
       'speed_reset': HotKey(key: PhysicalKeyboardKey.keyR),
+      'sub_seek_next': HotKey(key: PhysicalKeyboardKey.arrowRight, modifiers: [HotKeyModifier.control]),
+      'sub_seek_prev': HotKey(key: PhysicalKeyboardKey.arrowLeft, modifiers: [HotKeyModifier.control]),
+      'shader_toggle': HotKey(key: PhysicalKeyboardKey.keyG),
     };
   }
 
@@ -466,8 +519,7 @@ class SettingsService extends BaseSharedPreferencesService {
 
   Map<String, dynamic> _serializeHotKey(HotKey hotKey) {
     // Use USB HID code for reliable serialization across debug/release modes
-    final physicalKey = hotKey.key as PhysicalKeyboardKey;
-    final usbHidCode = physicalKey.usbHidUsage.toRadixString(16).padLeft(8, '0');
+    final usbHidCode = hotKey.key.usbHidUsage.toRadixString(16).padLeft(8, '0');
     return {'key': usbHidCode, 'modifiers': hotKey.modifiers?.map((m) => m.name).toList() ?? []};
   }
 
@@ -763,13 +815,22 @@ class SettingsService extends BaseSharedPreferencesService {
     return prefs.getBool(_keyRememberTrackSelections) ?? true;
   }
 
+  // Click on Video Player Settings
+  Future<void> setClickVideoTogglesPlayback(bool value) async {
+    await prefs.setBool(_keyClickVideoTogglesPlayback, value);
+  }
+
+  bool getClickVideoTogglesPlayback() {
+    return prefs.getBool(_keyClickVideoTogglesPlayback) ?? false;
+  }
+
   // Auto Skip Intro
   Future<void> setAutoSkipIntro(bool value) async {
     await prefs.setBool(_keyAutoSkipIntro, value);
   }
 
   bool getAutoSkipIntro() {
-    return prefs.getBool(_keyAutoSkipIntro) ?? true; // Default: enabled
+    return prefs.getBool(_keyAutoSkipIntro) ?? false; // Default: disabled
   }
 
   // Auto Skip Credits
@@ -778,7 +839,7 @@ class SettingsService extends BaseSharedPreferencesService {
   }
 
   bool getAutoSkipCredits() {
-    return prefs.getBool(_keyAutoSkipCredits) ?? true; // Default: enabled
+    return prefs.getBool(_keyAutoSkipCredits) ?? false; // Default: disabled
   }
 
   // Auto Skip Delay (in seconds)
@@ -894,6 +955,88 @@ class SettingsService extends BaseSharedPreferencesService {
     await setMpvConfigEntries(preset.entries);
   }
 
+  // Discord Rich Presence
+  Future<void> setEnableDiscordRPC(bool enabled) async {
+    await prefs.setBool(_keyEnableDiscordRPC, enabled);
+  }
+
+  bool getEnableDiscordRPC() {
+    return prefs.getBool(_keyEnableDiscordRPC) ?? false; // Default disabled
+  }
+
+  // Match Content Frame Rate (Android only)
+  Future<void> setMatchContentFrameRate(bool enabled) async {
+    await prefs.setBool(_keyMatchContentFrameRate, enabled);
+  }
+
+  bool getMatchContentFrameRate() {
+    return prefs.getBool(_keyMatchContentFrameRate) ?? false; // Default disabled
+  }
+
+  // Default Playback Speed (0.5 to 3.0)
+  Future<void> setDefaultPlaybackSpeed(double speed) async {
+    await prefs.setDouble(_keyDefaultPlaybackSpeed, speed.clamp(0.5, 3.0));
+  }
+
+  double getDefaultPlaybackSpeed() {
+    return prefs.getDouble(_keyDefaultPlaybackSpeed) ?? 1.0; // Default: normal speed
+  }
+
+  // Auto-Play Next Episode
+  Future<void> setAutoPlayNextEpisode(bool enabled) async {
+    await prefs.setBool(_keyAutoPlayNextEpisode, enabled);
+  }
+
+  bool getAutoPlayNextEpisode() {
+    return prefs.getBool(_keyAutoPlayNextEpisode) ?? true; // Default enabled
+  }
+
+  // Use ExoPlayer on Android (default: true)
+  // When false, uses MPV as the player backend
+  Future<void> setUseExoPlayer(bool enabled) async {
+    await prefs.setBool(_keyUseExoPlayer, enabled);
+  }
+
+  bool getUseExoPlayer() {
+    return prefs.getBool(_keyUseExoPlayer) ?? true; // Default: ExoPlayer
+  }
+
+  // Always Keep Sidebar Open (Desktop/TV only)
+  Future<void> setAlwaysKeepSidebarOpen(bool enabled) async {
+    await prefs.setBool(_keyAlwaysKeepSidebarOpen, enabled);
+  }
+
+  bool getAlwaysKeepSidebarOpen() {
+    return prefs.getBool(_keyAlwaysKeepSidebarOpen) ?? false; // Default: collapsed
+  }
+
+  // Show Unwatched Count (show unwatched episode count on shows/seasons)
+  Future<void> setShowUnwatchedCount(bool enabled) async {
+    await prefs.setBool(_keyShowUnwatchedCount, enabled);
+  }
+
+  bool getShowUnwatchedCount() {
+    return prefs.getBool(_keyShowUnwatchedCount) ?? true; // Default: enabled (show counts)
+  }
+
+  // Global Shader Preset (for MPV video enhancement)
+  Future<void> setGlobalShaderPreset(String presetId) async {
+    await prefs.setString(_keyGlobalShaderPreset, presetId);
+  }
+
+  String getGlobalShaderPreset() {
+    return prefs.getString(_keyGlobalShaderPreset) ?? 'none'; // Default: no shader
+  }
+
+  // Require Profile Selection on App Open
+  Future<void> setRequireProfileSelectionOnOpen(bool enabled) async {
+    await prefs.setBool(_keyRequireProfileSelectionOnOpen, enabled);
+  }
+
+  bool getRequireProfileSelectionOnOpen() {
+    return prefs.getBool(_keyRequireProfileSelectionOnOpen) ?? false;
+  }
+
   // Reset all settings to defaults
   Future<void> resetAllSettings() async {
     await Future.wait([
@@ -908,7 +1051,8 @@ class SettingsService extends BaseSharedPreferencesService {
       prefs.remove(_keyPreferredAudioCodec),
       prefs.remove(_keyLibraryDensity),
       prefs.remove(_keyViewMode),
-      prefs.remove(_keyUseSeasonPoster),
+      prefs.remove(_keyUseSeasonPoster), // Legacy key
+      prefs.remove(_keyEpisodePosterMode),
       prefs.remove(_keyShowHeroSection),
       prefs.remove(_keySeekTimeSmall),
       prefs.remove(_keySeekTimeLarge),
@@ -933,6 +1077,15 @@ class SettingsService extends BaseSharedPreferencesService {
       prefs.remove(_keyShowPerformanceOverlay),
       prefs.remove(_keyMpvConfigEntries),
       prefs.remove(_keyMpvConfigPresets),
+      prefs.remove(_keyEnableDiscordRPC),
+      prefs.remove(_keyMatchContentFrameRate),
+      prefs.remove(_keyDefaultPlaybackSpeed),
+      prefs.remove(_keyAutoPlayNextEpisode),
+      prefs.remove(_keyUseExoPlayer),
+      prefs.remove(_keyAlwaysKeepSidebarOpen),
+      prefs.remove(_keyShowUnwatchedCount),
+      prefs.remove(_keyGlobalShaderPreset),
+      prefs.remove(_keyRequireProfileSelectionOnOpen),
     ]);
   }
 
@@ -957,12 +1110,13 @@ class SettingsService extends BaseSharedPreferencesService {
       'preferredAudioCodec': getPreferredAudioCodec(),
       'libraryDensity': getLibraryDensity().name,
       'viewMode': getViewMode().name,
-      'useSeasonPoster': getUseSeasonPoster(),
+      'episodePosterMode': getEpisodePosterMode().name,
       'seekTimeSmall': getSeekTimeSmall(),
       'seekTimeLarge': getSeekTimeLarge(),
       'keyboardShortcuts': getKeyboardShortcuts(),
       'keyboardHotkeys': hotkeys.map((key, value) => MapEntry(key, _serializeHotKey(value))),
       'rememberTrackSelections': getRememberTrackSelections(),
+      'clickVideoTogglesPlayback': getClickVideoTogglesPlayback(),
       'autoSkipIntro': getAutoSkipIntro(),
       'autoSkipCredits': getAutoSkipCredits(),
       'autoSkipDelay': getAutoSkipDelay(),

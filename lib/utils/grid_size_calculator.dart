@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/settings_service.dart' show LibraryDensity;
 import 'layout_constants.dart';
+import 'platform_detector.dart';
 
 /// Utility class for calculating consistent grid sizes across the app
 class GridSizeCalculator {
@@ -13,19 +14,23 @@ class GridSizeCalculator {
   /// Calculates the maximum cross-axis extent for grid items based on screen size and density
   static double getMaxCrossAxisExtent(BuildContext context, LibraryDensity density) {
     final screenWidth = MediaQuery.of(context).size.width;
+    final isTV = PlatformDetector.isTV();
     final isDesktop = screenWidth > desktopBreakpoint;
     final isTablet = screenWidth > tabletBreakpoint && screenWidth <= desktopBreakpoint;
 
     switch (density) {
       case LibraryDensity.comfortable:
+        if (isTV) return GridLayoutConstants.comfortableTV;
         if (isDesktop) return GridLayoutConstants.comfortableDesktop;
         if (isTablet) return GridLayoutConstants.comfortableTablet;
         return GridLayoutConstants.comfortableMobile;
       case LibraryDensity.compact:
+        if (isTV) return GridLayoutConstants.compactTV;
         if (isDesktop) return GridLayoutConstants.compactDesktop;
         if (isTablet) return GridLayoutConstants.compactTablet;
         return GridLayoutConstants.compactMobile;
       case LibraryDensity.normal:
+        if (isTV) return GridLayoutConstants.normalTV;
         if (isDesktop) return GridLayoutConstants.normalDesktop;
         if (isTablet) return GridLayoutConstants.normalTablet;
         return GridLayoutConstants.normalMobile;
@@ -46,6 +51,24 @@ class GridSizeCalculator {
     final screenWidth = MediaQuery.of(context).size.width;
     final availableWidth = screenWidth - horizontalPadding;
 
+    // TV-specific sizing for 10ft viewing distance
+    if (PlatformDetector.isTV()) {
+      double divisor;
+      double maxItemWidth;
+      switch (density) {
+        case LibraryDensity.comfortable:
+          divisor = 7.0;
+          maxItemWidth = 220;
+        case LibraryDensity.normal:
+          divisor = 9.0;
+          maxItemWidth = 190;
+        case LibraryDensity.compact:
+          divisor = 11.0;
+          maxItemWidth = 160;
+      }
+      return (availableWidth / divisor).clamp(0, maxItemWidth);
+    }
+
     if (ScreenBreakpoints.isWideTabletOrLarger(screenWidth)) {
       // Wide screens (desktop/large tablet landscape): Responsive division
       double divisor;
@@ -53,31 +76,31 @@ class GridSizeCalculator {
 
       switch (density) {
         case LibraryDensity.comfortable:
-          divisor = 6.5;
-          maxItemWidth = 280;
+          divisor = 5.0;
+          maxItemWidth = 320;
         case LibraryDensity.normal:
-          divisor = 8.0;
-          maxItemWidth = 200;
+          divisor = 6.0;
+          maxItemWidth = 260;
         case LibraryDensity.compact:
-          divisor = 10.0;
-          maxItemWidth = 160;
+          divisor = 7.5;
+          maxItemWidth = 200;
       }
 
       return (availableWidth / divisor).clamp(0, maxItemWidth);
     } else if (ScreenBreakpoints.isTablet(screenWidth)) {
-      // Medium screens (tablets): Fixed 4-5-6 items
+      // Medium screens (tablets): Fixed 3-4-5 items
       int targetItemCount = switch (density) {
-        LibraryDensity.comfortable => 4,
-        LibraryDensity.normal => 5,
-        LibraryDensity.compact => 6,
+        LibraryDensity.comfortable => 3,
+        LibraryDensity.normal => 4,
+        LibraryDensity.compact => 5,
       };
       return availableWidth / targetItemCount;
     } else {
-      // Small screens (phones): Fixed 2-3-4 items
+      // Small screens (phones): Fixed 2-3-3 items
       int targetItemCount = switch (density) {
         LibraryDensity.comfortable => 2,
         LibraryDensity.normal => 3,
-        LibraryDensity.compact => 4,
+        LibraryDensity.compact => 3,
       };
       return availableWidth / targetItemCount;
     }
@@ -97,5 +120,28 @@ class GridSizeCalculator {
   /// Returns whether the current screen is a mobile-sized screen
   static bool isMobile(BuildContext context) {
     return MediaQuery.of(context).size.width <= tabletBreakpoint;
+  }
+
+  /// Calculates the number of columns for a given available width.
+  ///
+  /// Uses the same formula as Flutter's SliverGridDelegateWithMaxCrossAxisExtent:
+  /// `((crossAxisExtent + crossAxisSpacing) / (maxCrossAxisExtent + crossAxisSpacing)).ceil()`
+  ///
+  /// [crossAxisExtent] should come from layout constraints (e.g. `SliverLayoutBuilder`
+  /// or `LayoutBuilder`), not from `MediaQuery`, to account for sidebars or other
+  /// elements that reduce the grid's actual width.
+  static int getColumnCount(double crossAxisExtent, double maxCrossAxisExtent) {
+    final crossAxisSpacing = GridLayoutConstants.crossAxisSpacing;
+    return ((crossAxisExtent + crossAxisSpacing) / (maxCrossAxisExtent + crossAxisSpacing)).ceil().clamp(1, 100);
+  }
+
+  /// Check if the given index is in the first row of a grid with given column count.
+  static bool isFirstRow(int index, int columnCount) {
+    return index < columnCount;
+  }
+
+  /// Check if the given index is in the first column of a grid with given column count.
+  static bool isFirstColumn(int index, int columnCount) {
+    return index % columnCount == 0;
   }
 }

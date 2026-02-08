@@ -27,7 +27,6 @@ class StorageService extends BaseSharedPreferencesService {
   static const String _prefixLibrarySort = 'library_sort_';
   static const String _prefixLibraryGrouping = 'library_grouping_';
   static const String _prefixLibraryTab = 'library_tab_';
-
   // Key groups for bulk clearing
   static const List<String> _credentialKeys = [
     _keyServerUrl,
@@ -57,19 +56,9 @@ class StorageService extends BaseSharedPreferencesService {
   @override
   Future<void> onInit() async {
     // Seed known values so logs can redact immediately on startup.
-    LogRedactionManager.registerServerUrl(getServerUrl());
-    LogRedactionManager.registerToken(getToken());
+    LogRedactionManager.registerServerUrl(prefs.getString(_keyServerUrl));
+    LogRedactionManager.registerToken(prefs.getString(_keyToken));
     LogRedactionManager.registerToken(getPlexToken());
-  }
-
-  // Server URL
-  Future<void> saveServerUrl(String url) async {
-    await prefs.setString(_keyServerUrl, url);
-    LogRedactionManager.registerServerUrl(url);
-  }
-
-  String? getServerUrl() {
-    return prefs.getString(_keyServerUrl);
   }
 
   // Per-Server Endpoint URL (for multi-server connection caching)
@@ -86,25 +75,6 @@ class StorageService extends BaseSharedPreferencesService {
     await prefs.remove('$_prefixServerEndpoint$serverId');
   }
 
-  // Server Access Token
-  Future<void> saveToken(String token) async {
-    await prefs.setString(_keyToken, token);
-    LogRedactionManager.registerToken(token);
-  }
-
-  String? getToken() {
-    return prefs.getString(_keyToken);
-  }
-
-  // Alias for server access token for clarity
-  Future<void> saveServerAccessToken(String token) async {
-    await saveToken(token);
-  }
-
-  String? getServerAccessToken() {
-    return getToken();
-  }
-
   // Plex.tv Token (for API access)
   Future<void> savePlexToken(String token) async {
     await prefs.setString(_keyPlexToken, token);
@@ -113,15 +83,6 @@ class StorageService extends BaseSharedPreferencesService {
 
   String? getPlexToken() {
     return prefs.getString(_keyPlexToken);
-  }
-
-  // Server Data (full PlexServer object as JSON)
-  Future<void> saveServerData(Map<String, dynamic> serverJson) async {
-    await _setJsonMap(_keyServerData, serverJson);
-  }
-
-  Map<String, dynamic>? getServerData() {
-    return _readJsonMap(_keyServerData);
   }
 
   // Client Identifier
@@ -133,29 +94,10 @@ class StorageService extends BaseSharedPreferencesService {
     return prefs.getString(_keyClientId);
   }
 
-  // Save all credentials at once
-  Future<void> saveCredentials({
-    required String serverUrl,
-    required String token,
-    required String clientIdentifier,
-  }) async {
-    await Future.wait([saveServerUrl(serverUrl), saveToken(token), saveClientIdentifier(clientIdentifier)]);
-  }
-
-  // Check if credentials exist
-  bool hasCredentials() {
-    return getServerUrl() != null && getToken() != null;
-  }
-
   // Clear all credentials
   Future<void> clearCredentials() async {
     await Future.wait([..._credentialKeys.map((k) => prefs.remove(k)), clearMultiServerData()]);
     LogRedactionManager.clearTrackedValues();
-  }
-
-  // Get all credentials as a map
-  Map<String, String?> getCredentials() {
-    return {'serverUrl': getServerUrl(), 'token': getToken(), 'clientIdentifier': getClientIdentifier()};
   }
 
   int? getSelectedLibraryIndex() {
@@ -306,14 +248,6 @@ class StorageService extends BaseSharedPreferencesService {
   // Clear all user-related data (for logout)
   Future<void> clearUserData() async {
     await Future.wait([clearCredentials(), clearLibraryPreferences()]);
-  }
-
-  // Update current user after switching
-  Future<void> updateCurrentUser(String userUUID, String authToken) async {
-    await Future.wait([
-      saveCurrentUserUUID(userUUID),
-      saveToken(authToken), // Update the main token
-    ]);
   }
 
   // Multi-Server Support Methods

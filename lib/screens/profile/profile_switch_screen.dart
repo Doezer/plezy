@@ -6,32 +6,42 @@ import '../../providers/user_profile_provider.dart';
 import '../../utils/provider_extensions.dart';
 import '../../utils/snackbar_helper.dart';
 import 'profile_list_tile.dart';
-import '../../widgets/desktop_app_bar.dart';
+import '../../focus/focusable_wrapper.dart';
+import '../../widgets/focused_scroll_scaffold.dart';
 import '../libraries/state_messages.dart';
 import '../../i18n/strings.g.dart';
 
-class ProfileSwitchScreen extends StatelessWidget {
-  const ProfileSwitchScreen({super.key});
+class ProfileSwitchScreen extends StatefulWidget {
+  final bool requireSelection;
+
+  const ProfileSwitchScreen({super.key, this.requireSelection = false});
+
+  @override
+  State<ProfileSwitchScreen> createState() => _ProfileSwitchScreenState();
+}
+
+class _ProfileSwitchScreenState extends State<ProfileSwitchScreen> {
+  bool _allowPop = false;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Scaffold(
-      body: CustomScrollView(
-        slivers: [
-          CustomAppBar(title: Text(t.screens.switchProfile)),
-          SliverFillRemaining(
-            child: Consumer<UserProfileProvider>(
-              builder: (context, userProvider, child) {
-                final users = userProvider.home?.users ?? [];
+    return PopScope(
+      canPop: !widget.requireSelection || _allowPop,
+      child: Consumer<UserProfileProvider>(
+        builder: (context, userProvider, child) {
+          final users = userProvider.home?.users ?? [];
 
-                if (userProvider.isLoading) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                if (userProvider.error != null) {
-                  return Center(
+          return FocusedScrollScaffold(
+            title: Text(t.screens.switchProfile),
+            automaticallyImplyLeading: !widget.requireSelection,
+            slivers: [
+              if (userProvider.isLoading)
+                const SliverFillRemaining(child: Center(child: CircularProgressIndicator()))
+              else if (userProvider.error != null)
+                SliverFillRemaining(
+                  child: Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
@@ -49,51 +59,59 @@ class ProfileSwitchScreen extends StatelessWidget {
                         ),
                       ],
                     ),
-                  );
-                }
-
-                if (users.isEmpty) {
-                  return const EmptyStateWidget(
+                  ),
+                )
+              else if (users.isEmpty)
+                const SliverFillRemaining(
+                  child: EmptyStateWidget(
                     message: 'No profiles available',
                     subtitle: 'Contact your Plex administrator to add profiles',
                     icon: Symbols.person_off_rounded,
-                  );
-                }
-
-                return ListView.builder(
-                  itemCount: users.length,
-                  padding: const EdgeInsets.all(16),
-                  itemBuilder: (context, index) {
+                  ),
+                )
+              else
+                SliverList(
+                  delegate: SliverChildBuilderDelegate((context, index) {
                     final user = users[index];
                     final isCurrentUser = user.uuid == userProvider.currentUser?.uuid;
+                    final isFirstSelectable =
+                        !isCurrentUser && !users.take(index).any((u) => u.uuid != userProvider.currentUser?.uuid);
 
                     return Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Card(
-                        child: ProfileListTile(
-                          user: user,
-                          isCurrentUser: isCurrentUser,
-                          onTap: () => _switchToUser(context, user),
+                      padding: EdgeInsets.only(left: 16, right: 16, top: index == 0 ? 16 : 0, bottom: 8),
+                      child: FocusableWrapper(
+                        autofocus: isFirstSelectable,
+                        disableScale: true,
+                        onSelect: isCurrentUser ? null : () => _switchToUser(context, user),
+                        child: Card(
+                          child: ProfileListTile(
+                            user: user,
+                            isCurrentUser: isCurrentUser,
+                            onTap: () => _switchToUser(context, user),
+                          ),
                         ),
                       ),
                     );
-                  },
-                );
-              },
-            ),
-          ),
-        ],
+                  }, childCount: users.length),
+                ),
+            ],
+          );
+        },
       ),
     );
   }
 
   void _switchToUser(BuildContext context, PlexHomeUser user) async {
     final userProvider = context.userProfile;
+    final navigator = Navigator.of(context);
     final success = await userProvider.switchToUser(user, context);
 
-    if (success && context.mounted) {
-      Navigator.of(context).pop();
-    } else if (!success && context.mounted) {
+    if (success) {
+      if (widget.requireSelection) {
+        setState(() => _allowPop = true);
+      }
+      navigator.pop(true);
+    } else if (context.mounted) {
       showErrorSnackBar(context, t.errors.failedToSwitchProfile(displayName: user.displayName));
     }
   }

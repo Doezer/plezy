@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'dpad_navigator.dart';
 import 'focus_theme.dart';
 import 'input_mode_tracker.dart';
+import 'key_event_utils.dart';
 
 /// A wrapper widget that makes its child focusable with D-pad navigation support.
 ///
@@ -31,6 +32,12 @@ class FocusableWrapper extends StatefulWidget {
 
   /// Called when the user presses UP and there's no focusable item above.
   final VoidCallback? onNavigateUp;
+
+  /// Called when the user presses LEFT and there's no focusable item to the left.
+  final VoidCallback? onNavigateLeft;
+
+  /// Called when the user presses RIGHT and there's no focusable item to the right.
+  final VoidCallback? onNavigateRight;
 
   /// Called when the user presses BACK.
   final VoidCallback? onBack;
@@ -87,6 +94,8 @@ class FocusableWrapper extends StatefulWidget {
     this.onLongPress,
     this.onFocusChange,
     this.onNavigateUp,
+    this.onNavigateLeft,
+    this.onNavigateRight,
     this.onBack,
     this.autofocus = false,
     this.focusNode,
@@ -182,6 +191,12 @@ class _FocusableWrapperState extends State<FocusableWrapper> with SingleTickerPr
         _isFocused = hasFocus;
       });
 
+      // Reset long press state when focus is lost
+      if (!hasFocus) {
+        _longPressTimer?.cancel();
+        _isSelectKeyDown = false;
+      }
+
       // Animate scale
       if (hasFocus) {
         _animationController.forward();
@@ -199,6 +214,10 @@ class _FocusableWrapperState extends State<FocusableWrapper> with SingleTickerPr
     }
   }
 
+  // Extra padding for focus decoration (scale + border extends beyond item bounds)
+  // Scale 1.02 adds ~1% on each side, plus 2.5px border = ~8px total padding needed
+  static const double _focusDecorationPadding = 8.0;
+
   void _scrollIntoView() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_isFocused) return;
@@ -206,51 +225,87 @@ class _FocusableWrapperState extends State<FocusableWrapper> with SingleTickerPr
       final renderObject = context.findRenderObject();
       if (renderObject == null) return;
 
+      final scrollable = Scrollable.maybeOf(context);
+      if (scrollable == null) return;
+
+      final viewport = scrollable.context.findRenderObject() as RenderBox?;
+      if (viewport == null) return;
+
+      // Get item's position relative to viewport
+      final itemBox = renderObject as RenderBox;
+      final itemPosition = itemBox.localToGlobal(Offset.zero, ancestor: viewport);
+
+      final viewportHeight = viewport.size.height;
+      final itemHeight = itemBox.size.height;
+      final itemVerticalCenter = itemPosition.dy + itemHeight / 2;
+
+      // Account for focus decoration when checking item visibility
+      final itemTop = itemPosition.dy - _focusDecorationPadding;
+      final itemBottom = itemPosition.dy + itemHeight + _focusDecorationPadding;
+
       if (widget.useComfortableZone) {
-        // Check if item is already in the comfortable zone
-        final scrollable = Scrollable.maybeOf(context);
-        if (scrollable == null) return;
-
-        final viewport = scrollable.context.findRenderObject() as RenderBox?;
-        if (viewport == null) return;
-
-        // Get item's position relative to viewport
-        final itemBox = renderObject as RenderBox;
-        final itemPosition = itemBox.localToGlobal(Offset.zero, ancestor: viewport);
-
-        // Check if item is already in the comfortable zone
-        final viewportHeight = viewport.size.height;
-        final itemHeight = itemBox.size.height;
-        final itemVerticalCenter = itemPosition.dy + itemHeight / 2;
-
-        // Define comfortable zone - if item center is within middle 60% of viewport, don't scroll
+        // Define comfortable zone - if item (including focus decoration) is within middle 60% of viewport, don't scroll
         final comfortZoneTop = viewportHeight * 0.2;
         final comfortZoneBottom = viewportHeight * 0.8;
 
-        if (itemVerticalCenter >= comfortZoneTop && itemVerticalCenter <= comfortZoneBottom) {
+        if (itemTop >= comfortZoneTop && itemBottom <= comfortZoneBottom) {
           // Item is in comfortable zone, no need to scroll
+          return;
+        }
+      } else {
+        // When not using comfortable zone, still skip scroll if item is already
+        // close to target position (prevents jitter when navigating horizontally)
+        final targetY = viewportHeight * widget.scrollAlignment;
+        final distance = (itemVerticalCenter - targetY).abs();
+        // Skip scroll if within half the item height of target
+        if (distance < itemHeight / 2) {
           return;
         }
       }
 
-      // Item is outside comfortable zone or comfortable zone disabled, scroll to alignment
-      Scrollable.ensureVisible(
-        context,
-        alignment: widget.scrollAlignment,
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeInOut,
-      );
+      // Calculate target scroll offset for the immediate scrollable only.
+      // This avoids Scrollable.ensureVisible which scrolls ALL ancestor scrollables,
+      // which can cause issues with nested scroll views (e.g., chips bar scrolling
+      // out of view when focusing grid items in library browse tab).
+      final position = scrollable.position;
+      final currentOffset = position.pixels;
+
+      // Target: item center should be at scrollAlignment of viewport
+      // Add padding to ensure focus decoration is fully visible
+      final targetViewportY = viewportHeight * widget.scrollAlignment;
+      var scrollDelta = itemVerticalCenter - targetViewportY;
+
+      // If item would be near the top edge, add extra scroll to show focus decoration
+      final projectedItemTop = itemTop - scrollDelta;
+      if (projectedItemTop < _focusDecorationPadding) {
+        scrollDelta -= (_focusDecorationPadding - projectedItemTop);
+      }
+
+      final targetOffset = (currentOffset + scrollDelta).clamp(position.minScrollExtent, position.maxScrollExtent);
+
+      position.animateTo(targetOffset, duration: const Duration(milliseconds: 200), curve: Curves.easeInOut);
     });
   }
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     final key = event.logicalKey;
 
+    if (SelectKeyUpSuppressor.consumeIfSuppressed(event)) {
+      return KeyEventResult.handled;
+    }
+
     // Call custom key handler first
     if (widget.onKeyEvent != null) {
       final result = widget.onKeyEvent!(node, event);
       if (result == KeyEventResult.handled) {
         return result;
+      }
+    }
+
+    if (widget.onBack != null) {
+      final backResult = handleBackKeyAction(event, widget.onBack!);
+      if (backResult != KeyEventResult.ignored) {
+        return backResult;
       }
     }
 
@@ -265,6 +320,7 @@ class _FocusableWrapperState extends State<FocusableWrapper> with SingleTickerPr
             _longPressTimer = Timer(widget.longPressDuration, () {
               // Long press detected
               if (mounted) {
+                SelectKeyUpSuppressor.suppressSelectUntilKeyUp();
                 widget.onLongPress?.call();
               }
             });
@@ -300,6 +356,7 @@ class _FocusableWrapperState extends State<FocusableWrapper> with SingleTickerPr
 
     // Context menu key
     if (key.isContextMenuKey) {
+      SelectKeyUpSuppressor.suppressSelectUntilKeyUp();
       widget.onLongPress?.call();
       return KeyEventResult.handled;
     }
@@ -310,9 +367,17 @@ class _FocusableWrapperState extends State<FocusableWrapper> with SingleTickerPr
       return KeyEventResult.handled;
     }
 
-    // BACK key
-    if (key.isBackKey && widget.onBack != null) {
-      widget.onBack!();
+    // LEFT arrow - if callback provided, navigate left (caller is responsible
+    // for only providing this callback when the item is at the left edge)
+    if (key == LogicalKeyboardKey.arrowLeft && widget.onNavigateLeft != null) {
+      widget.onNavigateLeft!();
+      return KeyEventResult.handled;
+    }
+
+    // RIGHT arrow - if callback provided, navigate right (caller is responsible
+    // for only providing this callback when the item is at the right edge)
+    if (key == LogicalKeyboardKey.arrowRight && widget.onNavigateRight != null) {
+      widget.onNavigateRight!();
       return KeyEventResult.handled;
     }
 

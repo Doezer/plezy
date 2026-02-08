@@ -1,13 +1,21 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:plezy/utils/platform_detector.dart';
 import 'package:plezy/widgets/app_icon.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:provider/provider.dart';
+import '../widgets/collapsible_text.dart';
 
+import '../focus/dpad_navigator.dart';
+import '../focus/focusable_wrapper.dart';
 import '../focus/key_event_utils.dart';
 import '../focus/input_mode_tracker.dart';
+import '../widgets/focus_builders.dart';
+import '../widgets/media_card.dart';
 import '../i18n/strings.g.dart';
 import '../widgets/plex_optimized_image.dart';
 import '../utils/plex_image_helper.dart';
@@ -22,14 +30,18 @@ import '../theme/mono_tokens.dart';
 import '../utils/app_logger.dart';
 import '../utils/formatters.dart';
 import '../utils/provider_extensions.dart';
+import '../utils/dialogs.dart';
 import '../utils/snackbar_helper.dart';
 import '../utils/video_player_navigation.dart';
 import '../widgets/app_bar_back_button.dart';
 import '../utils/desktop_window_padding.dart';
 import '../widgets/horizontal_scroll_with_arrows.dart';
-import '../widgets/focusable_media_card.dart';
 import '../widgets/media_context_menu.dart';
 import '../widgets/placeholder_container.dart';
+import '../mixins/watch_state_aware.dart';
+import '../mixins/deletion_aware.dart';
+import '../utils/watch_state_notifier.dart';
+import '../utils/deletion_notifier.dart';
 import 'season_detail_screen.dart';
 
 class MediaDetailScreen extends StatefulWidget {
@@ -42,7 +54,7 @@ class MediaDetailScreen extends StatefulWidget {
   State<MediaDetailScreen> createState() => _MediaDetailScreenState();
 }
 
-class _MediaDetailScreenState extends State<MediaDetailScreen> {
+class _MediaDetailScreenState extends State<MediaDetailScreen> with WatchStateAware, DeletionAware {
   List<PlexMetadata> _seasons = [];
   bool _isLoadingSeasons = false;
   PlexMetadata? _fullMetadata;
@@ -53,11 +65,173 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
   bool _watchStateChanged = false;
   double _scrollOffset = 0;
 
+  // Locked focus pattern for seasons
+  int _focusedSeasonIndex = 0;
+  late final FocusNode _seasonsFocusNode;
+  late final FocusNode _playButtonFocusNode;
+  Timer? _selectKeyTimer;
+  bool _isSelectKeyDown = false;
+  bool _longPressTriggered = false;
+  static const _longPressDuration = Duration(milliseconds: 500);
+
+  // GlobalKeys for season cards to access their context menu
+  final Map<int, GlobalKey<MediaCardState>> _seasonCardKeys = {};
+
+  String _toGlobalKey(String ratingKey, {String? serverId}) =>
+      '${serverId ?? widget.metadata.serverId ?? ''}:$ratingKey';
+
+  // WatchStateAware: watch the show/movie and all season ratingKeys
+  @override
+  Set<String>? get watchedRatingKeys {
+    final keys = <String>{widget.metadata.ratingKey};
+    for (final season in _seasons) {
+      keys.add(season.ratingKey);
+    }
+    return keys;
+  }
+
+  @override
+  String? get watchStateServerId => widget.metadata.serverId;
+
+  @override
+  Set<String>? get watchedGlobalKeys {
+    final serverId = widget.metadata.serverId;
+    if (serverId == null) return null;
+
+    final keys = <String>{_toGlobalKey(widget.metadata.ratingKey, serverId: serverId)};
+    for (final season in _seasons) {
+      keys.add(_toGlobalKey(season.ratingKey, serverId: season.serverId ?? serverId));
+    }
+    return keys;
+  }
+
+  @override
+  void onWatchStateChanged(WatchStateEvent event) {
+    // Lightweight refresh - no loader, preserves scroll position
+    if (!widget.isOffline) {
+      _refreshWatchState();
+    }
+  }
+
+  @override
+  Set<String>? get deletionRatingKeys {
+    final keys = <String>{widget.metadata.ratingKey};
+    for (final season in _seasons) {
+      keys.add(season.ratingKey);
+    }
+    return keys;
+  }
+
+  @override
+  String? get deletionServerId => widget.metadata.serverId;
+
+  @override
+  Set<String>? get deletionGlobalKeys {
+    final serverId = widget.metadata.serverId;
+    if (serverId == null) return null;
+
+    final keys = <String>{_toGlobalKey(widget.metadata.ratingKey, serverId: serverId)};
+    for (final season in _seasons) {
+      keys.add(_toGlobalKey(season.ratingKey, serverId: season.serverId ?? serverId));
+    }
+    return keys;
+  }
+
+  @override
+  void onDeletionEvent(DeletionEvent event) {
+    if (widget.isOffline) return;
+
+    // If we have a season that matches the rating key exactly, then remove it from our list
+    final seasonIndex = _seasons.indexWhere((s) => s.ratingKey == event.ratingKey);
+    if (seasonIndex != -1) {
+      setState(() {
+        _seasons.removeAt(seasonIndex);
+      });
+
+      // If the show has no more seasons, navigate back up to the library
+      if (_seasons.isEmpty && mounted) {
+        Navigator.of(context).pop();
+        return;
+      }
+      _refreshWatchState();
+      return;
+    }
+
+    // If a child item was delete, then update our list to reflect that.
+    // If all children were deleted, remove our item.
+    // Otherwise, just update the counts.
+    for (final parentKey in event.parentChain) {
+      final idx = _seasons.indexWhere((s) => s.ratingKey == parentKey);
+      if (idx != -1) {
+        final season = _seasons[idx];
+        final newLeafCount = (season.leafCount ?? 1) - 1;
+        if (newLeafCount <= 0) {
+          // Season is now empty, remove it
+          setState(() {
+            _seasons.removeAt(idx);
+          });
+
+          // Otherwise we have no more seasons, so navigate up
+          if (_seasons.isEmpty && mounted) {
+            Navigator.of(context).pop();
+            return;
+          }
+        } else {
+          setState(() {
+            // Otherwise just update the counts
+            _seasons[idx] = season.copyWith(leafCount: newLeafCount);
+          });
+        }
+        _refreshWatchState();
+        return;
+      }
+    }
+  }
+
+  /// Lightweight refresh for watch state changes - no loader, preserves scroll
+  Future<void> _refreshWatchState() async {
+    final client = _getClientForMetadata(context);
+    if (client == null) return;
+
+    try {
+      // Fetch updated metadata + on-deck without showing loader
+      final result = await client.getMetadataWithImagesAndOnDeck(widget.metadata.ratingKey);
+      final metadata = result['metadata'] as PlexMetadata?;
+      final onDeckEpisode = result['onDeckEpisode'] as PlexMetadata?;
+
+      if (metadata != null && mounted) {
+        setState(() {
+          _fullMetadata = metadata.copyWith(serverId: widget.metadata.serverId, serverName: widget.metadata.serverName);
+          _onDeckEpisode = onDeckEpisode?.copyWith(
+            serverId: widget.metadata.serverId,
+            serverName: widget.metadata.serverName,
+          );
+        });
+      }
+
+      // Refresh seasons for updated watched counts (also without loader)
+      if (widget.metadata.isShow) {
+        final seasons = await client.getChildren(widget.metadata.ratingKey);
+        if (mounted) {
+          setState(() {
+            _seasons = seasons
+                .map((s) => s.copyWith(serverId: widget.metadata.serverId, serverName: widget.metadata.serverName))
+                .toList();
+          });
+        }
+      }
+    } catch (e) {
+      // Silently fail - data will refresh on next navigation
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _scrollController = ScrollController();
     _scrollController.addListener(_onScroll);
+    _seasonsFocusNode = FocusNode(debugLabel: 'seasons_row');
+    _playButtonFocusNode = FocusNode(debugLabel: 'play_button');
     _loadFullMetadata();
   }
 
@@ -71,6 +245,9 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
   void dispose() {
     _scrollController.dispose();
     _seasonsScrollController.dispose();
+    _seasonsFocusNode.dispose();
+    _playButtonFocusNode.dispose();
+    _selectKeyTimer?.cancel();
     super.dispose();
   }
 
@@ -156,6 +333,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
         SizedBox(
           height: 48,
           child: FilledButton(
+            focusNode: _playButtonFocusNode,
             autofocus: InputModeTracker.isKeyboardMode(context),
             onPressed: onPlayPressed,
             style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 16)),
@@ -300,24 +478,20 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
                 return IconButton.filledTonal(
                   onPressed: () async {
                     // Show options: Delete or Retry
-                    final action = await showDialog<String>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: const Text('Cancelled Download'),
-                        content: const Text('This download was cancelled. What would you like to do?'),
-                        actions: [
-                          TextButton(onPressed: () => Navigator.pop(context, 'delete'), child: Text(t.common.delete)),
-                          TextButton(onPressed: () => Navigator.pop(context, 'retry'), child: const Text('Retry')),
-                        ],
-                      ),
+                    final retry = await showConfirmDialog(
+                      context,
+                      title: 'Cancelled Download',
+                      message: 'This download was cancelled. What would you like to do?',
+                      cancelText: t.common.delete,
+                      confirmText: 'Retry',
                     );
 
-                    if (action == 'delete' && context.mounted) {
+                    if (!retry && context.mounted) {
                       await downloadProvider.deleteDownload(globalKey);
                       if (context.mounted) {
                         showSuccessSnackBar(context, t.downloads.downloadDeleted);
                       }
-                    } else if (action == 'retry' && context.mounted) {
+                    } else if (retry && context.mounted) {
                       final client = _getClientForMetadata(context);
                       if (client == null) return;
                       await downloadProvider.deleteDownload(globalKey);
@@ -382,23 +556,13 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
                 return IconButton.filledTonal(
                   onPressed: () async {
                     // Show delete download confirmation
-                    final confirmed = await showDialog<bool>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: Text(t.downloads.deleteDownload),
-                        content: Text(t.downloads.deleteConfirm(title: metadata.title)),
-                        actions: [
-                          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(t.common.cancel)),
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, true),
-                            style: TextButton.styleFrom(foregroundColor: Colors.red),
-                            child: Text(t.common.delete),
-                          ),
-                        ],
-                      ),
+                    final confirmed = await showDeleteConfirmation(
+                      context,
+                      title: t.downloads.deleteDownload,
+                      message: t.downloads.deleteConfirm(title: metadata.title),
                     );
 
-                    if (confirmed == true && context.mounted) {
+                    if (confirmed && context.mounted) {
                       await downloadProvider.deleteDownload(globalKey);
                       if (context.mounted) {
                         showSuccessSnackBar(context, t.downloads.downloadDeleted);
@@ -448,7 +612,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
                 } else {
                   await offlineWatch.markAsWatched(serverId: metadata.serverId!, ratingKey: metadata.ratingKey);
                 }
-                if (context.mounted) {
+                if (mounted) {
                   showAppSnackBar(
                     context,
                     isWatched ? t.messages.markedAsUnwatchedOffline : t.messages.markedAsWatchedOffline,
@@ -466,7 +630,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
                 } else {
                   await client.markAsWatched(metadata.ratingKey);
                 }
-                if (context.mounted) {
+                if (mounted) {
                   _watchStateChanged = true;
                   showSuccessSnackBar(context, isWatched ? t.messages.markedAsUnwatched : t.messages.markedAsWatched);
                   // Update watch state without full rebuild
@@ -474,7 +638,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
                 }
               }
             } catch (e) {
-              if (context.mounted) {
+              if (mounted) {
                 showErrorSnackBar(context, t.messages.errorLoading(error: e.toString()));
               }
             }
@@ -692,7 +856,119 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
     }
   }
 
+  /// Scroll season list to center the item at the given index
+  void _scrollSeasonToIndex(int index, {bool animate = true}) {
+    if (!_seasonsScrollController.hasClients) return;
+
+    final screenWidth = MediaQuery.of(context).size.width;
+    final cardWidth = screenWidth >= 1400
+        ? 220.0
+        : screenWidth >= 900
+        ? 200.0
+        : screenWidth >= 700
+        ? 190.0
+        : 160.0;
+    final itemExtent = cardWidth + 4; // card + padding
+
+    final viewport = _seasonsScrollController.position.viewportDimension;
+    final targetCenter = 12 + (index * itemExtent) + (itemExtent / 2); // 12 = leading padding
+    final desiredOffset = (targetCenter - (viewport / 2)).clamp(0.0, _seasonsScrollController.position.maxScrollExtent);
+
+    if (animate) {
+      _seasonsScrollController.animateTo(
+        desiredOffset,
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOut,
+      );
+    } else {
+      _seasonsScrollController.jumpTo(desiredOffset);
+    }
+  }
+
+  /// Handle key events for the seasons row (locked focus pattern)
+  KeyEventResult _handleSeasonsKeyEvent(FocusNode node, KeyEvent event) {
+    final key = event.logicalKey;
+
+    // Let back key propagate to parent Focus handler
+    if (key.isBackKey) {
+      return KeyEventResult.ignored;
+    }
+
+    // Handle SELECT with long-press detection
+    if (key.isSelectKey) {
+      if (event is KeyDownEvent) {
+        // Always reset state on KeyDown to handle cases where KeyUp was
+        // consumed by a modal (e.g., context menu) and we didn't see it
+        _selectKeyTimer?.cancel();
+        _isSelectKeyDown = true;
+        _longPressTriggered = false;
+        _selectKeyTimer = Timer(_longPressDuration, () {
+          if (!mounted) return;
+          if (_isSelectKeyDown) {
+            _longPressTriggered = true;
+            SelectKeyUpSuppressor.suppressSelectUntilKeyUp();
+            // Long-press: show context menu for the focused season
+            _seasonCardKeys[_focusedSeasonIndex]?.currentState?.showContextMenu();
+          }
+        });
+        return KeyEventResult.handled;
+      } else if (event is KeyRepeatEvent) {
+        return KeyEventResult.handled;
+      } else if (event is KeyUpEvent) {
+        final timerWasActive = _selectKeyTimer?.isActive ?? false;
+        _selectKeyTimer?.cancel();
+        if (!_longPressTriggered && timerWasActive && _isSelectKeyDown) {
+          // Short tap: navigate to season
+          if (_focusedSeasonIndex < _seasons.length) {
+            _navigateToSeason(_seasons[_focusedSeasonIndex]);
+          }
+        }
+        _isSelectKeyDown = false;
+        _longPressTriggered = false;
+        return KeyEventResult.handled;
+      }
+    }
+
+    if (!event.isActionable) return KeyEventResult.ignored;
+    if (_seasons.isEmpty) return KeyEventResult.ignored;
+
+    // LEFT: previous season
+    if (key.isLeftKey) {
+      if (_focusedSeasonIndex > 0) {
+        _focusedSeasonIndex--;
+        _scrollSeasonToIndex(_focusedSeasonIndex);
+        setState(() {});
+      }
+      return KeyEventResult.handled;
+    }
+
+    // RIGHT: next season
+    if (key.isRightKey) {
+      if (_focusedSeasonIndex < _seasons.length - 1) {
+        _focusedSeasonIndex++;
+        _scrollSeasonToIndex(_focusedSeasonIndex);
+        setState(() {});
+      }
+      return KeyEventResult.handled;
+    }
+
+    // UP: scroll to top and focus play button
+    if (key.isUpKey) {
+      _scrollController.animateTo(0, duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
+      _playButtonFocusNode.requestFocus();
+      return KeyEventResult.handled;
+    }
+
+    // DOWN: consume (nothing below seasons to focus)
+    if (key.isDownKey) {
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
+  }
+
   /// Build horizontal seasons list for larger screens (>=600px)
+  /// Uses locked focus pattern for D-pad centered scrolling
   Widget _buildHorizontalSeasons() {
     final screenWidth = MediaQuery.of(context).size.width;
     final cardWidth = screenWidth >= 1400
@@ -705,32 +981,55 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
     final posterHeight = (cardWidth - 16) * 1.5;
     final containerHeight = posterHeight + 66;
 
-    return SizedBox(
-      height: containerHeight,
-      child: HorizontalScrollWithArrows(
-        controller: _seasonsScrollController,
-        builder: (scrollController) => ListView.builder(
-          controller: scrollController,
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(vertical: 5),
-          itemCount: _seasons.length,
-          itemBuilder: (context, index) {
-            final season = _seasons[index];
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 2),
-              child: FocusableMediaCard(
-                item: season,
-                width: cardWidth,
-                height: posterHeight,
-                forceGridMode: true,
-                isOffline: widget.isOffline,
-                onRefresh: (_) {
-                  _watchStateChanged = true;
-                  _updateWatchState();
-                },
-              ),
-            );
-          },
+    final hasFocus = _seasonsFocusNode.hasFocus;
+
+    return Focus(
+      focusNode: _seasonsFocusNode,
+      onKeyEvent: _handleSeasonsKeyEvent,
+      child: SizedBox(
+        height: containerHeight,
+        child: HorizontalScrollWithArrows(
+          controller: _seasonsScrollController,
+          builder: (scrollController) => ListView.builder(
+            controller: scrollController,
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 12),
+            itemCount: _seasons.length,
+            itemBuilder: (context, index) {
+              final season = _seasons[index];
+              final isFocused = hasFocus && index == _focusedSeasonIndex;
+              // Get or create a GlobalKey for this season card
+              final cardKey = _seasonCardKeys.putIfAbsent(index, () => GlobalKey<MediaCardState>());
+
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: FocusBuilders.buildLockedFocusWrapper(
+                  context: context,
+                  isFocused: isFocused,
+                  onTap: () => _navigateToSeason(season),
+                  child: MediaCard(
+                    key: cardKey,
+                    item: season,
+                    width: cardWidth,
+                    height: posterHeight,
+                    forceGridMode: true,
+                    isOffline: widget.isOffline,
+                    onRefresh: (_) {
+                      _watchStateChanged = true;
+                      _updateWatchState();
+                    },
+                    onListRefresh: () {
+                      if (widget.isOffline) {
+                        _loadSeasonsFromDownloads();
+                      } else {
+                        _loadSeasons();
+                      }
+                    },
+                  ),
+                ),
+              );
+            },
+          ),
         ),
       ),
     );
@@ -760,6 +1059,13 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
           onRefresh: () {
             _watchStateChanged = true;
             _updateWatchState();
+          },
+          onListRefresh: () {
+            if (widget.isOffline) {
+              _loadSeasonsFromDownloads();
+            } else {
+              _loadSeasons();
+            }
           },
         );
       },
@@ -994,18 +1300,29 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
     // Use full metadata if loaded, otherwise use passed metadata
     final metadata = _fullMetadata ?? widget.metadata;
     final isShow = metadata.isShow;
+    final isMobile = PlatformDetector.isMobile(context);
+    final isTv = PlatformDetector.isTV();
 
     KeyEventResult handleBack(FocusNode _, KeyEvent event) =>
         handleBackKeyNavigation(context, event, result: _watchStateChanged);
 
     // Show loading state while fetching full metadata
     if (_isLoadingMetadata) {
-      return Focus(
+      final loading = Focus(
         onKeyEvent: handleBack,
         child: Scaffold(
           appBar: AppBar(),
           body: const Center(child: CircularProgressIndicator()),
         ),
+      );
+      final blockSystemBack = Platform.isAndroid && InputModeTracker.isKeyboardMode(context);
+      if (!blockSystemBack) {
+        return loading;
+      }
+      return PopScope(
+        canPop: false, // Prevent system back from double-popping on Android keyboard/TV
+        onPopInvokedWithResult: (didPop, result) {},
+        child: loading,
       );
     }
 
@@ -1013,7 +1330,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
     final size = MediaQuery.of(context).size;
     final headerHeight = size.height * 0.6;
 
-    return Focus(
+    final content = Focus(
       onKeyEvent: handleBack,
       child: Scaffold(
         body: Stack(
@@ -1052,12 +1369,13 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
                                   // Online - use network image
                                   final client = _getClientForMetadata(context);
                                   final mediaQuery = MediaQuery.of(context);
+                                  final dpr = PlexImageHelper.effectiveDevicePixelRatio(context);
                                   final imageUrl = PlexImageHelper.getOptimizedImageUrl(
                                     client: client,
                                     thumbPath: metadata.art,
                                     maxWidth: mediaQuery.size.width,
                                     maxHeight: mediaQuery.size.height * 0.6,
-                                    devicePixelRatio: mediaQuery.devicePixelRatio,
+                                    devicePixelRatio: dpr,
                                     imageType: ImageType.art,
                                   );
 
@@ -1135,7 +1453,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
 
                                         // Online - use network image
                                         final client = _getClientForMetadata(context);
-                                        final dpr = MediaQuery.of(context).devicePixelRatio;
+                                        final dpr = PlexImageHelper.effectiveDevicePixelRatio(context);
                                         final logoUrl = PlexImageHelper.getOptimizedImageUrl(
                                           client: client,
                                           thumbPath: metadata.clearLogo,
@@ -1234,7 +1552,14 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
                             style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
                           ),
                           const SizedBox(height: 12),
-                          Text(metadata.summary!, style: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.6)),
+                          if (isTv)
+                            Text(metadata.summary!, style: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.6))
+                          else
+                            CollapsibleText(
+                              text: metadata.summary!,
+                              maxLines: isMobile ? 6 : 4,
+                              style: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.6),
+                            ),
                           const SizedBox(height: 24),
                         ],
 
@@ -1291,35 +1616,15 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
                                       children: [
                                         ClipRRect(
                                           borderRadius: BorderRadius.circular(tokens(context).radiusSm),
-                                          child: actor.thumb != null
-                                              ? CachedNetworkImage(
-                                                  imageUrl: actor.thumb!,
-                                                  width: 120,
-                                                  height: 120,
-                                                  fit: BoxFit.cover,
-                                                  placeholder: (context, url) => Container(
-                                                    width: 120,
-                                                    height: 120,
-                                                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                                                    child: const Center(
-                                                      child: AppIcon(Symbols.person_rounded, fill: 1),
-                                                    ),
-                                                  ),
-                                                  errorWidget: (context, url, error) => Container(
-                                                    width: 120,
-                                                    height: 120,
-                                                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                                                    child: const Center(
-                                                      child: AppIcon(Symbols.person_rounded, fill: 1),
-                                                    ),
-                                                  ),
-                                                )
-                                              : Container(
-                                                  width: 120,
-                                                  height: 120,
-                                                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                                                  child: const Center(child: AppIcon(Symbols.person_rounded, fill: 1)),
-                                                ),
+                                          child: PlexOptimizedImage(
+                                            client: _getClientForMetadata(context),
+                                            imagePath: actor.thumb,
+                                            width: 120,
+                                            height: 120,
+                                            fit: BoxFit.cover,
+                                            imageType: ImageType.avatar,
+                                            fallbackIcon: Symbols.person_rounded,
+                                          ),
                                         ),
                                         const SizedBox(height: 8),
                                         SizedBox(
@@ -1372,6 +1677,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
                     ),
                   ),
                 ),
+                SliverPadding(padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom)),
               ],
             ),
             // Sticky top bar with fading background
@@ -1417,6 +1723,17 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
           ],
         ),
       ),
+    );
+
+    final blockSystemBack = Platform.isAndroid && InputModeTracker.isKeyboardMode(context);
+    if (!blockSystemBack) {
+      return content;
+    }
+
+    return PopScope(
+      canPop: false, // Prevent system back from double-popping on Android keyboard/TV
+      onPopInvokedWithResult: (didPop, result) {},
+      child: content,
     );
   }
 
@@ -1478,12 +1795,13 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
   }
 }
 
-/// Season card widget
-class _SeasonCard extends StatelessWidget {
+/// Season card widget with D-pad long-press support
+class _SeasonCard extends StatefulWidget {
   final PlexMetadata season;
   final PlexClient? client;
   final VoidCallback onTap;
   final VoidCallback onRefresh;
+  final VoidCallback? onListRefresh;
   final bool isOffline;
   final String? localPosterPath;
 
@@ -1492,124 +1810,146 @@ class _SeasonCard extends StatelessWidget {
     this.client,
     required this.onTap,
     required this.onRefresh,
+    this.onListRefresh,
     this.isOffline = false,
     this.localPosterPath,
   });
 
   @override
-  Widget build(BuildContext context) {
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: MediaContextMenu(
-        item: season,
-        onRefresh: (ratingKey) => onRefresh(),
-        onTap: onTap,
-        child: Semantics(
-          label: "media-season-${season.ratingKey}",
-          identifier: "media-season-${season.ratingKey}",
-          button: true,
-          hint: "Tap to view ${season.title}",
-          child: InkWell(
-            onTap: onTap,
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                children: [
-                  // Season poster
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
-                    child: isOffline && localPosterPath != null
-                        ? Image.file(
-                            File(localPosterPath!),
-                            width: 80,
-                            height: 120,
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) => Container(
-                              width: 80,
-                              height: 120,
-                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                              child: const AppIcon(Symbols.movie_rounded, fill: 1, size: 32),
-                            ),
-                          )
-                        : season.thumb != null
-                        ? PlexOptimizedImage.poster(
-                            client: client,
-                            imagePath: season.thumb,
-                            width: 80,
-                            height: 120,
-                            fit: BoxFit.cover,
-                            placeholder: (context, url) => Container(
-                              width: 80,
-                              height: 120,
-                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                            ),
-                            errorWidget: (context, url, error) => Container(
-                              width: 80,
-                              height: 120,
-                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                              child: const AppIcon(Symbols.movie_rounded, fill: 1, size: 32),
-                            ),
-                          )
-                        : Container(
-                            width: 80,
-                            height: 120,
-                            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                            child: const AppIcon(Symbols.movie_rounded, fill: 1, size: 32),
-                          ),
-                  ),
-                  const SizedBox(width: 16),
+  State<_SeasonCard> createState() => _SeasonCardState();
+}
 
-                  // Season info
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          season.title,
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 4),
-                        if (season.leafCount != null)
+class _SeasonCardState extends State<_SeasonCard> {
+  final _contextMenuKey = GlobalKey<MediaContextMenuState>();
+
+  void _showContextMenu() {
+    _contextMenuKey.currentState?.showContextMenu(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FocusableWrapper(
+      enableLongPress: true,
+      onSelect: widget.onTap,
+      onLongPress: _showContextMenu,
+      borderRadius: 12, // Match card border radius
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: MediaContextMenu(
+          key: _contextMenuKey,
+          item: widget.season,
+          onRefresh: (ratingKey) => widget.onRefresh(),
+          onListRefresh: widget.onListRefresh,
+          onTap: widget.onTap,
+          child: Semantics(
+            label: "media-season-${widget.season.ratingKey}",
+            identifier: "media-season-${widget.season.ratingKey}",
+            button: true,
+            hint: "Tap to view ${widget.season.title}",
+            child: InkWell(
+              onTap: widget.onTap,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    // Season poster
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: widget.isOffline && widget.localPosterPath != null
+                          ? Image.file(
+                              File(widget.localPosterPath!),
+                              width: 80,
+                              height: 120,
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) => Container(
+                                width: 80,
+                                height: 120,
+                                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                                child: const AppIcon(Symbols.movie_rounded, fill: 1, size: 32),
+                              ),
+                            )
+                          : widget.season.thumb != null
+                          ? PlexOptimizedImage.poster(
+                              client: widget.client,
+                              imagePath: widget.season.thumb,
+                              width: 80,
+                              height: 120,
+                              fit: BoxFit.cover,
+                              placeholder: (context, url) => Container(
+                                width: 80,
+                                height: 120,
+                                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                              ),
+                              errorWidget: (context, url, error) => Container(
+                                width: 80,
+                                height: 120,
+                                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                                child: const AppIcon(Symbols.movie_rounded, fill: 1, size: 32),
+                              ),
+                            )
+                          : Container(
+                              width: 80,
+                              height: 120,
+                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                              child: const AppIcon(Symbols.movie_rounded, fill: 1, size: 32),
+                            ),
+                    ),
+                    const SizedBox(width: 16),
+
+                    // Season info
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
                           Text(
-                            t.discover.episodeCount(count: season.leafCount.toString()),
-                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.grey),
+                            widget.season.title,
+                            style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
                           ),
-                        // Hide watch progress when offline (not tracked)
-                        if (!isOffline) ...[
-                          const SizedBox(height: 8),
-                          if (season.viewedLeafCount != null && season.leafCount != null)
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                SizedBox(
-                                  width: 200,
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(4),
-                                    child: LinearProgressIndicator(
-                                      value: season.viewedLeafCount! / season.leafCount!,
-                                      backgroundColor: tokens(context).outline,
-                                      valueColor: AlwaysStoppedAnimation<Color>(Theme.of(context).colorScheme.primary),
-                                      minHeight: 6,
+                          const SizedBox(height: 4),
+                          if (widget.season.leafCount != null)
+                            Text(
+                              t.discover.episodeCount(count: widget.season.leafCount.toString()),
+                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.grey),
+                            ),
+                          // Hide watch progress when offline (not tracked)
+                          if (!widget.isOffline) ...[
+                            const SizedBox(height: 8),
+                            if (widget.season.viewedLeafCount != null && widget.season.leafCount != null)
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  SizedBox(
+                                    width: 200,
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(4),
+                                      child: LinearProgressIndicator(
+                                        value: widget.season.viewedLeafCount! / widget.season.leafCount!,
+                                        backgroundColor: tokens(context).outline,
+                                        valueColor: AlwaysStoppedAnimation<Color>(
+                                          Theme.of(context).colorScheme.primary,
+                                        ),
+                                        minHeight: 6,
+                                      ),
                                     ),
                                   ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  t.discover.watchedProgress(
-                                    watched: season.viewedLeafCount.toString(),
-                                    total: season.leafCount.toString(),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    t.discover.watchedProgress(
+                                      watched: widget.season.viewedLeafCount.toString(),
+                                      total: widget.season.leafCount.toString(),
+                                    ),
+                                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
                                   ),
-                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
-                                ),
-                              ],
-                            ),
+                                ],
+                              ),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
-                  ),
 
-                  const AppIcon(Symbols.chevron_right_rounded, fill: 1),
-                ],
+                    const AppIcon(Symbols.chevron_right_rounded, fill: 1),
+                  ],
+                ),
               ),
             ),
           ),

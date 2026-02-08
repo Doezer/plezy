@@ -1,14 +1,16 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../../../models/plex_media_info.dart';
 import '../../../i18n/strings.g.dart';
 import '../../../focus/focusable_wrapper.dart';
+import '../../../utils/formatters.dart';
 import '../painters/chapter_marker_painter.dart';
 
 /// Timeline slider with chapter markers for video playback
 ///
 /// Displays a horizontal slider showing playback position and duration,
 /// with optional chapter markers overlaid at their respective positions.
-class TimelineSlider extends StatelessWidget {
+class TimelineSlider extends StatefulWidget {
   final Duration position;
   final Duration duration;
   final List<PlexChapter> chapters;
@@ -28,6 +30,9 @@ class TimelineSlider extends StatelessWidget {
   /// Whether the slider is enabled for interaction.
   final bool enabled;
 
+  /// Optional callback that returns a thumbnail URL for a given timestamp.
+  final String Function(Duration time)? thumbnailUrlBuilder;
+
   const TimelineSlider({
     super.key,
     required this.position,
@@ -40,89 +45,205 @@ class TimelineSlider extends StatelessWidget {
     this.onKeyEvent,
     this.onFocusChange,
     this.enabled = true,
+    this.thumbnailUrlBuilder,
   });
 
   @override
-  Widget build(BuildContext context) {
-    Widget slider = Stack(
-      alignment: Alignment.center,
-      children: [
-        // Chapter markers layer
-        if (chaptersLoaded && chapters.isNotEmpty && duration.inMilliseconds > 0)
-          Positioned.fill(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Row(
-                children:
-                    chapters.map((chapter) {
-                      final chapterPosition = (chapter.startTimeOffset ?? 0) / duration.inMilliseconds;
-                      return Expanded(flex: (chapterPosition * 1000).toInt(), child: const SizedBox());
-                    }).toList()..add(
-                      Expanded(
-                        flex:
-                            1000 -
-                            chapters.fold<int>(
-                              0,
-                              (sum, chapter) =>
-                                  sum + ((chapter.startTimeOffset ?? 0) / duration.inMilliseconds * 1000).toInt(),
-                            ),
-                        child: const SizedBox(),
-                      ),
-                    ),
+  State<TimelineSlider> createState() => _TimelineSliderState();
+}
+
+class _TimelineSliderState extends State<TimelineSlider> {
+  double? _mousePosition;
+  double? _dragValue;
+
+  static const _sliderPadding = 24.0;
+
+  static const _thumbWidth = 160.0;
+  static const _thumbHeight = 90.0;
+
+  Widget _buildTooltip(double sliderWidth, double pixelX, Duration time) {
+    // Snap to the nearest 5-second interval since Plex's thumbnails are generated every 5 seconds.
+    // Round here so the URL is consistent for widget-level cache hits rather than a new URL for each timestamp.
+    final roundedMs = (time.inMilliseconds / 5000).round() * 5000;
+    final roundedTime = Duration(milliseconds: roundedMs);
+    final thumbnailUrl = widget.thumbnailUrlBuilder?.call(roundedTime);
+    final hasThumbnail = thumbnailUrl != null;
+
+    final tooltipWidth = hasThumbnail ? _thumbWidth : 64.0;
+    final timestampOffset = 16.0;
+    final tooltipTop = hasThumbnail ? -(_thumbHeight + timestampOffset) : -timestampOffset;
+
+    // Center tooltip on cursor, clamped so it stays within the slider bounds
+    final left = (pixelX - tooltipWidth / 2).clamp(0.0, sliderWidth - tooltipWidth);
+    return Positioned(
+      left: left,
+      top: tooltipTop,
+      child: IgnorePointer(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (hasThumbnail)
+              Container(
+                width: _thumbWidth,
+                height: _thumbHeight,
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.circular(6),
+                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 8, spreadRadius: 1)],
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: CachedNetworkImage(
+                  imageUrl: thumbnailUrl,
+                  fit: BoxFit.cover,
+                  fadeInDuration: Duration.zero,
+                  placeholder: (_, __) => const SizedBox.shrink(), // Show nothing for placeholder
+                  errorWidget: (_, __, ___) => const SizedBox.shrink(), // Show nothing for errors
+                ),
               ),
-            ),
-          ),
-        // Slider - use IgnorePointer to block interaction while preserving visual style
-        IgnorePointer(
-          ignoring: !enabled,
-          child: Semantics(
-            label: t.videoControls.timelineSlider,
-            slider: true,
-            child: Slider(
-              value: duration.inMilliseconds > 0 ? position.inMilliseconds.toDouble() : 0.0,
-              min: 0.0,
-              max: duration.inMilliseconds.toDouble(),
-              onChanged: (value) {
-                onSeek(Duration(milliseconds: value.toInt()));
-              },
-              onChangeEnd: (value) {
-                onSeekEnd(Duration(milliseconds: value.toInt()));
-              },
-              activeColor: Colors.white,
-              inactiveColor: Colors.white.withValues(alpha: 0.3),
-            ),
-          ),
-        ),
-        // Chapter marker indicators
-        if (chaptersLoaded && chapters.isNotEmpty && duration.inMilliseconds > 0)
-          Positioned.fill(
-            child: IgnorePointer(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: CustomPaint(
-                  painter: ChapterMarkerPainter(chapters: chapters, duration: duration),
+            if (hasThumbnail) const SizedBox(height: 4),
+            Container(
+              width: 64.0,
+              height: 26,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                formatDurationTimestamp(time),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  height: 1.0,
+                  fontFeatures: [FontFeature.tabularFigures()],
                 ),
               ),
             ),
-          ),
-      ],
+          ],
+        ),
+      ),
     );
+  }
 
-    // Wrap with FocusableWrapper when focusNode is provided
-    if (focusNode != null) {
-      slider = FocusableWrapper(
-        focusNode: focusNode,
-        onKeyEvent: enabled ? onKeyEvent : null,
-        onFocusChange: onFocusChange,
-        borderRadius: 8,
-        autoScroll: false,
-        useBackgroundFocus: true,
-        disableScale: true,
-        semanticLabel: t.videoControls.timelineSlider,
-        child: slider,
-      );
-    }
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final sliderWidth = constraints.maxWidth;
+        // Calculate the actual track width by subtracting the thumb padding on each side
+        final trackWidth = sliderWidth - 2 * _sliderPadding;
+        final durationMs = widget.duration.inMilliseconds;
 
-    return slider;
+        // Resolve tooltip position (drag takes priority over hover)
+        Widget? tooltip;
+        if (durationMs > 0) {
+          if (_dragValue != null) {
+            // Convert drag value (ms) to a 0..1 fraction, then map to pixel
+            // position on the track (offset by padding to align with the slider)
+            final fraction = (_dragValue! / durationMs).clamp(0.0, 1.0);
+            final px = _sliderPadding + fraction * trackWidth;
+            tooltip = _buildTooltip(sliderWidth, px, Duration(milliseconds: _dragValue!.toInt()));
+          } else if (_mousePosition != null) {
+            // Convert mouse pixel position to a 0..1 fraction of the track
+            // (subtract padding to get position relative to track start),
+            // then map that fraction to a time in milliseconds
+            final fraction = ((_mousePosition! - _sliderPadding) / trackWidth).clamp(0.0, 1.0);
+            final time = Duration(milliseconds: (fraction * durationMs).round());
+            tooltip = _buildTooltip(sliderWidth, _mousePosition!, time);
+          }
+        }
+
+        Widget slider = Stack(
+          clipBehavior: Clip.none,
+          alignment: Alignment.center,
+          children: [
+            // Chapter markers layer
+            if (widget.chaptersLoaded && widget.chapters.isNotEmpty && widget.duration.inMilliseconds > 0)
+              Positioned.fill(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Row(
+                    children:
+                        widget.chapters.map((chapter) {
+                          final chapterPosition = (chapter.startTimeOffset ?? 0) / widget.duration.inMilliseconds;
+                          return Expanded(flex: (chapterPosition * 1000).toInt(), child: const SizedBox());
+                        }).toList()..add(
+                          Expanded(
+                            flex:
+                                1000 -
+                                widget.chapters.fold<int>(
+                                  0,
+                                  (sum, chapter) =>
+                                      sum +
+                                      ((chapter.startTimeOffset ?? 0) / widget.duration.inMilliseconds * 1000).toInt(),
+                                ),
+                            child: const SizedBox(),
+                          ),
+                        ),
+                  ),
+                ),
+              ),
+            // Slider - use IgnorePointer to block interaction while preserving visual style
+            IgnorePointer(
+              ignoring: !widget.enabled,
+              child: Semantics(
+                label: t.videoControls.timelineSlider,
+                slider: true,
+                child: Slider(
+                  value: widget.duration.inMilliseconds > 0 ? widget.position.inMilliseconds.toDouble() : 0.0,
+                  min: 0.0,
+                  max: widget.duration.inMilliseconds.toDouble(),
+                  onChanged: (value) {
+                    setState(() => _dragValue = value);
+                    widget.onSeek(Duration(milliseconds: value.toInt()));
+                  },
+                  onChangeEnd: (value) {
+                    setState(() => _dragValue = null);
+                    widget.onSeekEnd(Duration(milliseconds: value.toInt()));
+                  },
+                  activeColor: Colors.white,
+                  inactiveColor: Colors.white.withValues(alpha: 0.3),
+                ),
+              ),
+            ),
+            // Chapter marker indicators
+            if (widget.chaptersLoaded && widget.chapters.isNotEmpty && widget.duration.inMilliseconds > 0)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: CustomPaint(
+                      painter: ChapterMarkerPainter(chapters: widget.chapters, duration: widget.duration),
+                    ),
+                  ),
+                ),
+              ),
+            if (tooltip != null) tooltip,
+          ],
+        );
+
+        // Wrap with FocusableWrapper when focusNode is provided
+        if (widget.focusNode != null) {
+          slider = FocusableWrapper(
+            focusNode: widget.focusNode,
+            onKeyEvent: widget.enabled ? widget.onKeyEvent : null,
+            onFocusChange: widget.onFocusChange,
+            borderRadius: 8,
+            autoScroll: false,
+            useBackgroundFocus: true,
+            disableScale: true,
+            semanticLabel: t.videoControls.timelineSlider,
+            child: slider,
+          );
+        }
+
+        return MouseRegion(
+          // Handle mouse hover events
+          onHover: (event) => setState(() => _mousePosition = event.localPosition.dx),
+          onExit: (_) => setState(() => _mousePosition = null),
+          child: slider,
+        );
+      },
+    );
   }
 }

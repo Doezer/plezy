@@ -7,6 +7,39 @@ import '../models/plex_user_profile.dart';
 import '../models/plex_home.dart';
 import '../models/user_switch_response.dart';
 import '../utils/app_logger.dart';
+import '../utils/connection_constants.dart';
+
+/// Redacts the middle of an IP address or hostname for safe logging.
+/// E.g. `192.168.1.50` → `192.***.***.50`, `my.server.example.com` → `my.***.***. com`.
+String _redactHost(String host) {
+  // Strip brackets from IPv6
+  final bare = host.startsWith('[') && host.endsWith(']')
+      ? host.substring(1, host.length - 1)
+      : host;
+
+  // IPv6
+  if (bare.contains(':')) {
+    final parts = bare.split(':');
+    if (parts.length > 2) {
+      return '${parts.first}:***:${parts.last}';
+    }
+    return bare;
+  }
+
+  // IPv4
+  final ipParts = bare.split('.');
+  if (ipParts.length == 4 && ipParts.every((p) => int.tryParse(p) != null)) {
+    return '${ipParts.first}.***.***.${ipParts.last}';
+  }
+
+  // Hostname
+  final hostParts = bare.split('.');
+  if (hostParts.length >= 3) {
+    return '${hostParts.first}.***.${hostParts.last}';
+  }
+
+  return bare;
+}
 
 class PlexAuthService {
   static const String _appName = 'Plezy';
@@ -364,8 +397,8 @@ class PlexServer {
       return;
     }
 
-    const preferredTimeout = Duration(seconds: 2);
-    const raceTimeout = Duration(seconds: 4);
+    const preferredTimeout = ConnectionTimeouts.preferredEndpointProbe;
+    const raceTimeout = ConnectionTimeouts.connectionRace;
 
     final candidates = _buildPrioritizedCandidates();
     if (candidates.isEmpty) {
@@ -378,6 +411,20 @@ class PlexServer {
       'Starting server connection discovery',
       error: {'preferred': preferredUri, 'candidateCount': totalCandidates},
     );
+
+    for (final conn in connections) {
+      final redactedUri = conn.uri.replaceAll(
+        RegExp(r'//[^:/]+'),
+        '//${_redactHost(conn.address)}',
+      );
+      appLogger.d('Raw API connection', error: {
+        'uri': redactedUri,
+        'address': _redactHost(conn.address),
+        'local': conn.local,
+        'relay': conn.relay,
+        'protocol': conn.protocol,
+      });
+    }
 
     _ConnectionCandidate? firstCandidate;
 
@@ -412,6 +459,16 @@ class PlexServer {
         PlexClient.testConnectionWithLatency(candidate.url, accessToken, timeout: raceTimeout).then((result) {
           completedTests++;
 
+          if (!result.success) {
+            appLogger.w('Connection candidate failed', error: {
+              'url': candidate.url,
+              'type': candidate.connection.displayType,
+              'https': candidate.isHttps,
+              'error': result.error,
+              'latencyMs': result.latencyMs,
+            });
+          }
+
           if (result.success && !completer.isCompleted) {
             completer.complete(candidate);
           }
@@ -424,7 +481,11 @@ class PlexServer {
 
       firstCandidate = await completer.future;
       if (firstCandidate == null) {
-        appLogger.e('No working server connections after race');
+        appLogger.e('No working server connections after race', error: {
+          'server': name,
+          'candidateCount': totalCandidates,
+          'types': candidates.map((c) => c.connection.displayType).toSet().toList(),
+        });
         return; // No working connections found
       }
       appLogger.i(
@@ -433,8 +494,18 @@ class PlexServer {
       );
     }
 
-    final firstConnection = _updateConnectionUrl(firstCandidate.connection, firstCandidate.url);
+    // Attempt HTTPS upgrade on the Phase 1 winner before emitting
+    final upgradedFirstCandidate = await _upgradeCandidateToHttpsIfPossible(firstCandidate);
+    final emitCandidate = upgradedFirstCandidate ?? firstCandidate;
+
+    final firstConnection = _updateConnectionUrl(emitCandidate.connection, emitCandidate.url);
     yield firstConnection;
+    if (upgradedFirstCandidate != null && upgradedFirstCandidate.url != firstCandidate.url) {
+      appLogger.i(
+        'Phase 1 winner upgraded to HTTPS',
+        error: {'from': firstCandidate.url, 'to': upgradedFirstCandidate.url},
+      );
+    }
     appLogger.d(
       'Emitted first working connection, continuing latency tests in background',
       error: {'uri': firstConnection.uri},
@@ -553,6 +624,12 @@ class PlexServer {
     }
 
     for (final connection in connections) {
+      // Skip endpoints that are never reachable from an external client:
+      // Docker bridge addresses and IPv6 link-local / all-zeros addresses.
+      if (_isUnreachableAddress(connection.address)) {
+        continue;
+      }
+
       // First, try the actual connection URI (may be HTTPS plex.direct)
       final isPlexDirect = connection.uri.contains('.plex.direct');
       final isHttps = connection.protocol == 'https';
@@ -631,7 +708,7 @@ class PlexServer {
     final result = await PlexClient.testConnectionWithLatency(
       httpsUrl,
       accessToken,
-      timeout: const Duration(seconds: 4),
+      timeout: ConnectionTimeouts.connectionRace,
     );
 
     if (!result.success) {
@@ -727,6 +804,32 @@ class PlexServer {
     });
 
     return entries.first.key;
+  }
+
+  /// Returns true if the address is known to be unreachable from external
+  /// clients (Docker bridge networks, IPv6 link-local, or all-zeros).
+  static bool _isUnreachableAddress(String address) {
+    // Docker bridge subnets (172.17.0.0/16, 172.18.0.0/16, etc.)
+    // Docker uses 172.17-31.x.x by default.
+    final dockerPattern = RegExp(r'^172\.(1[7-9]|2[0-9]|3[01])\.');
+    if (dockerPattern.hasMatch(address)) {
+      return true;
+    }
+
+    // IPv6 all-zeros (::) or link-local (fe80::)
+    final normalized = address.replaceAll('-', ':').toLowerCase();
+    if (normalized == '::' || normalized == '0000:0000:0000:0000:0000:0000:0000:0000') {
+      return true;
+    }
+    // Condensed all-zeros variants
+    if (RegExp(r'^(0+:){7}0+$').hasMatch(normalized)) {
+      return true;
+    }
+    if (normalized.startsWith('fe80:') || normalized.startsWith('fe80::')) {
+      return true;
+    }
+
+    return false;
   }
 }
 

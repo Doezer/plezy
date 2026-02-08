@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'dpad_navigator.dart';
+import 'key_event_utils.dart';
 
 /// Callbacks for chip key event handling.
 class ChipKeyCallbacks {
@@ -102,11 +103,18 @@ mixin FocusableChipStateMixin<T extends StatefulWidget> on State<T> {
   /// Returns [KeyEventResult.handled] if the event was consumed,
   /// [KeyEventResult.ignored] otherwise.
   KeyEventResult handleChipKeyEvent(FocusNode node, KeyEvent event, ChipKeyCallbacks callbacks) {
+    final key = event.logicalKey;
+
+    if (callbacks.onBack != null) {
+      final backResult = handleBackKeyAction(event, callbacks.onBack!);
+      if (backResult != KeyEventResult.ignored) {
+        return backResult;
+      }
+    }
+
     if (!event.isActionable) {
       return KeyEventResult.ignored;
     }
-
-    final key = event.logicalKey;
 
     // SELECT key activates the chip
     if (key.isSelectKey && callbacks.onSelect != null) {
@@ -114,15 +122,22 @@ mixin FocusableChipStateMixin<T extends StatefulWidget> on State<T> {
       return KeyEventResult.handled;
     }
 
-    // LEFT arrow
-    if (key.isLeftKey && callbacks.onNavigateLeft != null) {
-      callbacks.onNavigateLeft!();
-      return KeyEventResult.handled;
+    // LEFT arrow - call callback if provided, otherwise propagate to parent
+    if (key.isLeftKey) {
+      if (callbacks.onNavigateLeft != null) {
+        callbacks.onNavigateLeft!();
+        return KeyEventResult.handled;
+      }
+      // No callback - let parent handle (e.g., to focus sidebar)
+      return KeyEventResult.ignored;
     }
 
-    // RIGHT arrow
-    if (key.isRightKey && callbacks.onNavigateRight != null) {
-      callbacks.onNavigateRight!();
+    // RIGHT arrow - call callback if provided, otherwise consume to prevent escape
+    if (key.isRightKey) {
+      if (callbacks.onNavigateRight != null) {
+        callbacks.onNavigateRight!();
+      }
+      // Always consume RIGHT to prevent focus escape
       return KeyEventResult.handled;
     }
 
@@ -135,12 +150,6 @@ mixin FocusableChipStateMixin<T extends StatefulWidget> on State<T> {
     // UP arrow
     if (key.isUpKey && callbacks.onNavigateUp != null) {
       callbacks.onNavigateUp!();
-      return KeyEventResult.handled;
-    }
-
-    // BACK key
-    if (key.isBackKey && callbacks.onBack != null) {
-      callbacks.onBack!();
       return KeyEventResult.handled;
     }
 

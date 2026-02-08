@@ -1,7 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:plezy/widgets/app_icon.dart';
 import 'package:material_symbols_icons/symbols.dart';
+import 'package:provider/provider.dart';
 import '../focus/dpad_navigator.dart';
+import '../focus/key_event_utils.dart';
+import '../providers/settings_provider.dart';
+import '../services/settings_service.dart' show EpisodePosterMode;
 import '../theme/mono_tokens.dart';
 import '../utils/layout_constants.dart';
 import '../focus/locked_hub_controller.dart';
@@ -27,6 +34,7 @@ class HubSection extends StatefulWidget {
   final void Function(String)? onRefresh;
   final VoidCallback? onRemoveFromContinueWatching;
   final bool isInContinueWatching;
+  final bool showServerName;
 
   /// Callback for vertical navigation (up/down). Return true if handled.
   final bool Function(bool isUp)? onVerticalNavigation;
@@ -35,6 +43,14 @@ class HubSection extends StatefulWidget {
   /// Used to navigate focus back to the tab bar.
   final VoidCallback? onBack;
 
+  /// Called when the user presses UP while at the topmost item (first hub).
+  /// Used to navigate focus to the tab bar.
+  final VoidCallback? onNavigateUp;
+
+  /// Called when the user presses LEFT while at the leftmost item (index 0).
+  /// Used to navigate focus to the sidebar.
+  final VoidCallback? onNavigateToSidebar;
+
   const HubSection({
     super.key,
     required this.hub,
@@ -42,8 +58,11 @@ class HubSection extends StatefulWidget {
     this.onRefresh,
     this.onRemoveFromContinueWatching,
     this.isInContinueWatching = false,
+    this.showServerName = false,
     this.onVerticalNavigation,
     this.onBack,
+    this.onNavigateUp,
+    this.onNavigateToSidebar,
   });
 
   @override
@@ -51,6 +70,8 @@ class HubSection extends StatefulWidget {
 }
 
 class HubSectionState extends State<HubSection> {
+  static const _longPressDuration = Duration(milliseconds: 500);
+
   late FocusNode _hubFocusNode;
   final ScrollController _scrollController = ScrollController();
 
@@ -60,6 +81,10 @@ class HubSectionState extends State<HubSection> {
   /// Item extent for scroll calculations
   double _itemExtent = 0;
   static const double _leadingPadding = 12.0;
+
+  Timer? _longPressTimer;
+  bool _isSelectKeyDown = false;
+  bool _longPressTriggered = false;
 
   @override
   void initState() {
@@ -82,6 +107,7 @@ class HubSectionState extends State<HubSection> {
 
   @override
   void dispose() {
+    _longPressTimer?.cancel();
     _hubFocusNode.removeListener(_onFocusChange);
     _hubFocusNode.dispose();
     _scrollController.dispose();
@@ -89,6 +115,12 @@ class HubSectionState extends State<HubSection> {
   }
 
   void _onFocusChange() {
+    // Reset long press state when focus is lost
+    if (!_hubFocusNode.hasFocus) {
+      _longPressTimer?.cancel();
+      _isSelectKeyDown = false;
+      _longPressTriggered = false;
+    }
     // Rebuild to update visual focus state
     if (mounted) setState(() {});
   }
@@ -151,23 +183,65 @@ class HubSectionState extends State<HubSection> {
 
   /// Handle ALL key events at the hub level
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    final key = event.logicalKey;
+
+    if (key.isSelectKey) {
+      if (event is KeyDownEvent) {
+        if (!_isSelectKeyDown) {
+          _isSelectKeyDown = true;
+          _longPressTriggered = false;
+          _longPressTimer?.cancel();
+          _longPressTimer = Timer(_longPressDuration, () {
+            if (!mounted) return;
+            if (_isSelectKeyDown) {
+              _longPressTriggered = true;
+              SelectKeyUpSuppressor.suppressSelectUntilKeyUp();
+              _showContextMenuForCurrentItem();
+            }
+          });
+        }
+        return KeyEventResult.handled;
+      } else if (event is KeyRepeatEvent) {
+        return KeyEventResult.handled;
+      } else if (event is KeyUpEvent) {
+        final timerWasActive = _longPressTimer?.isActive ?? false;
+        _longPressTimer?.cancel();
+        if (!_longPressTriggered && timerWasActive && _isSelectKeyDown) {
+          _activateCurrentItem();
+        }
+        _isSelectKeyDown = false;
+        _longPressTriggered = false;
+        return KeyEventResult.handled;
+      }
+    }
+
+    if (widget.onBack != null) {
+      final backResult = handleBackKeyAction(event, widget.onBack!);
+      if (backResult != KeyEventResult.ignored) {
+        return backResult;
+      }
+    }
+
     // Handle key down and repeat events
     if (!event.isActionable) {
       return KeyEventResult.ignored;
     }
 
-    final key = event.logicalKey;
     final itemCount = widget.hub.items.length;
     if (itemCount == 0) return KeyEventResult.ignored;
 
-    // Left: move to previous item, ALWAYS consume to prevent escape
+    // Left: move to previous item, or navigate to sidebar at left edge
     if (key.isLeftKey) {
       if (_focusedIndex > 0) {
         _focusedIndex--;
         HubFocusMemory.setForHub(widget.hub.hubKey, _focusedIndex);
         _scrollToIndex(_focusedIndex);
         setState(() {});
+      } else if (widget.onNavigateToSidebar != null) {
+        // At leftmost item: navigate to sidebar
+        widget.onNavigateToSidebar!();
       }
+      // Always consume to prevent focus escape
       return KeyEventResult.handled;
     }
 
@@ -184,7 +258,11 @@ class HubSectionState extends State<HubSection> {
 
     // Up/Down: delegate to parent for vertical hub navigation, ALWAYS consume
     if (key.isUpKey) {
-      widget.onVerticalNavigation?.call(true);
+      final handled = widget.onVerticalNavigation?.call(true) ?? false;
+      // If not handled (at top boundary) and we have onNavigateUp, call it
+      if (!handled && widget.onNavigateUp != null) {
+        widget.onNavigateUp!();
+      }
       return KeyEventResult.handled;
     }
     if (key.isDownKey) {
@@ -192,21 +270,9 @@ class HubSectionState extends State<HubSection> {
       return KeyEventResult.handled;
     }
 
-    // Select: activate the current item
-    if (key.isSelectKey) {
-      _activateCurrentItem();
-      return KeyEventResult.handled;
-    }
-
     // Context menu key: show context menu
     if (key.isContextMenuKey) {
       _showContextMenuForCurrentItem();
-      return KeyEventResult.handled;
-    }
-
-    // Back key: navigate to tab bar
-    if (key.isBackKey && widget.onBack != null) {
-      widget.onBack!();
       return KeyEventResult.handled;
     }
 
@@ -231,7 +297,7 @@ class HubSectionState extends State<HubSection> {
   }
 
   Future<void> _navigateToItem(dynamic item) async {
-    await navigateToMediaItem(context, item, onRefresh: widget.onRefresh);
+    await navigateToMediaItem(context, item, onRefresh: widget.onRefresh, playDirectly: widget.isInContinueWatching);
   }
 
   void _navigateToHubDetail(BuildContext context) {
@@ -260,7 +326,7 @@ class HubSectionState extends State<HubSection> {
                   children: [
                     AppIcon(widget.icon, fill: 1),
                     const SizedBox(width: 8),
-                    Expanded(
+                    Flexible(
                       child: Text(
                         widget.hub.title,
                         style: Theme.of(context).textTheme.titleLarge,
@@ -268,6 +334,22 @@ class HubSectionState extends State<HubSection> {
                         maxLines: 1,
                       ),
                     ),
+                    if (widget.showServerName && widget.hub.serverName != null) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        '•',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.7),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        widget.hub.serverName!,
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.7),
+                        ),
+                      ),
+                    ],
                     if (widget.hub.more) ...[
                       const SizedBox(width: 4),
                       const AppIcon(Symbols.chevron_right_rounded, fill: 1, size: 20),
@@ -286,9 +368,9 @@ class HubSectionState extends State<HubSection> {
             onKeyEvent: _handleKeyEvent,
             child: LayoutBuilder(
               builder: (context, constraints) {
-                // Responsive card width based on screen size
+                // Responsive base card width for posters (2:3 aspect ratio)
                 final screenWidth = constraints.maxWidth;
-                final cardWidth = ScreenBreakpoints.isLargeDesktop(screenWidth)
+                final baseCardWidth = ScreenBreakpoints.isLargeDesktop(screenWidth)
                     ? 220.0
                     : ScreenBreakpoints.isDesktop(screenWidth)
                     ? 200.0
@@ -296,15 +378,34 @@ class HubSectionState extends State<HubSection> {
                     ? 190.0
                     : 160.0;
 
-                // Store item extent for scroll calculations
-                _itemExtent = cardWidth + 4; // 4px total horizontal padding
+                // Get episode poster mode setting
+                final episodePosterMode = context.watch<SettingsProvider>().episodePosterMode;
 
-                // MediaCard has 8px padding on all sides (16px total horizontally)
-                final posterWidth = cardWidth - 16;
-                // 2:3 poster aspect ratio
-                final posterHeight = posterWidth * 1.5;
-                // Container height calculation
+                // Determine hub content type for layout decisions
+                final hasEpisodes = widget.hub.items.any((item) => item.usesWideAspectRatio(episodePosterMode));
+                final hasNonEpisodes = widget.hub.items.any((item) => !item.usesWideAspectRatio(episodePosterMode));
+
+                // Mixed hub = has both episodes AND non-episodes (like Continue Watching)
+                final isMixedHub = hasEpisodes && hasNonEpisodes;
+
+                // Episode-only = all items are episodes with thumbnails
+                final isEpisodeOnlyHub = hasEpisodes && !hasNonEpisodes;
+
+                // Use 16:9 for episode-only hubs OR mixed hubs (with episode thumbnail mode)
+                final useWideLayout =
+                    episodePosterMode == EpisodePosterMode.episodeThumbnail && (isEpisodeOnlyHub || isMixedHub);
+
+                // Card dimensions based on hub type
+                const wideCardMultiplier = 1.5;
+                final cardWidth = useWideLayout ? baseCardWidth * wideCardMultiplier : baseCardWidth;
+                final posterWidth = cardWidth - 16; // 8px padding on each side
+                final posterHeight = useWideLayout
+                    ? posterWidth *
+                          (9 / 16) // 16:9 for wide layout
+                    : posterWidth * 1.5; // 2:3 for poster layout
+
                 final containerHeight = posterHeight + 66;
+                _itemExtent = cardWidth + 4;
 
                 return SizedBox(
                   height: containerHeight,
@@ -334,6 +435,7 @@ class HubSectionState extends State<HubSection> {
                               onRemoveFromContinueWatching: widget.onRemoveFromContinueWatching,
                               forceGridMode: true,
                               isInContinueWatching: widget.isInContinueWatching,
+                              mixedHubContext: isMixedHub,
                             ),
                           ),
                         );

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../focus/focusable_wrapper.dart';
+import '../utils/platform_detector.dart';
 import 'media_card.dart';
 
 /// A focusable wrapper for MediaCard that handles D-pad navigation.
@@ -31,9 +32,21 @@ class FocusableMediaCard extends StatefulWidget {
   /// Used to navigate from the top row to filter chips.
   final VoidCallback? onNavigateUp;
 
+  /// Called when the user presses LEFT and there's no focusable item to the left.
+  /// Used to navigate from the first column to the sidebar.
+  final VoidCallback? onNavigateLeft;
+
+  /// Called when the user presses RIGHT and there's no focusable item to the right.
+  /// Used to navigate from the last column to the alpha jump bar.
+  final VoidCallback? onNavigateRight;
+
   /// Called when the user presses BACK.
   /// Used to navigate from tab content to tab bar.
   final VoidCallback? onBack;
+
+  /// Called when focus changes.
+  /// Used to track which grid item was last focused.
+  final ValueChanged<bool>? onFocusChange;
 
   const FocusableMediaCard({
     super.key,
@@ -49,7 +62,10 @@ class FocusableMediaCard extends StatefulWidget {
     this.isOffline = false,
     this.focusNode,
     this.onNavigateUp,
+    this.onNavigateLeft,
+    this.onNavigateRight,
     this.onBack,
+    this.onFocusChange,
   });
 
   @override
@@ -67,9 +83,12 @@ class _FocusableMediaCardState extends State<FocusableMediaCard> {
       onSelect: () => _mediaCardKey.currentState?.handleTap(),
       onLongPress: () => _mediaCardKey.currentState?.showContextMenu(),
       onNavigateUp: widget.onNavigateUp,
+      onNavigateLeft: widget.onNavigateLeft,
+      onNavigateRight: widget.onNavigateRight,
       onBack: widget.onBack,
+      onFocusChange: widget.onFocusChange,
       enableLongPress: true,
-      useComfortableZone: true,
+      useComfortableZone: !PlatformDetector.isTV(), // Always center on TV
       scrollAlignment: 0.5,
       child: MediaCard(
         key: _mediaCardKey,

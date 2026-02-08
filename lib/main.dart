@@ -1,35 +1,39 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'dart:io' show Platform;
 import 'package:window_manager/window_manager.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'screens/main_screen.dart';
 import 'screens/auth_screen.dart';
 import 'services/storage_service.dart';
 import 'services/macos_titlebar_service.dart';
 import 'services/fullscreen_state_manager.dart';
-import 'services/update_service.dart';
 import 'services/settings_service.dart';
 import 'utils/platform_detector.dart';
+import 'services/discord_rpc_service.dart';
 import 'services/gamepad_service.dart';
 import 'providers/user_profile_provider.dart';
-import 'providers/plex_client_provider.dart';
 import 'providers/multi_server_provider.dart';
 import 'providers/server_state_provider.dart';
 import 'providers/theme_provider.dart';
 import 'providers/settings_provider.dart';
 import 'providers/hidden_libraries_provider.dart';
+import 'providers/libraries_provider.dart';
 import 'providers/playback_state_provider.dart';
 import 'providers/download_provider.dart';
 import 'providers/offline_mode_provider.dart';
 import 'providers/offline_watch_provider.dart';
+import 'providers/shader_provider.dart';
 import 'watch_together/watch_together.dart';
 import 'services/multi_server_manager.dart';
 import 'services/offline_watch_sync_service.dart';
+import 'services/server_connection_orchestrator.dart';
 import 'services/data_aggregation_service.dart';
 import 'services/in_app_review_service.dart';
 import 'services/server_registry.dart';
 import 'services/download_manager_service.dart';
+import 'services/pip_service.dart';
 import 'services/download_storage_service.dart';
 import 'services/plex_api_cache.dart';
 import 'database/app_database.dart';
@@ -38,9 +42,29 @@ import 'utils/orientation_helper.dart';
 import 'utils/language_codes.dart';
 import 'i18n/strings.g.dart';
 import 'focus/input_mode_tracker.dart';
+import 'focus/key_event_utils.dart';
+import 'package:intl/date_symbol_data_local.dart';
+
+// Workaround for Flutter bug #177992: iPadOS 26.1+ misinterprets fake touch events
+// at (0,0) as barrier taps, causing modals to dismiss immediately.
+// Remove when Flutter PR #179643 is merged.
+bool _zeroOffsetPointerGuardInstalled = false;
+
+void _installZeroOffsetPointerGuard() {
+  if (_zeroOffsetPointerGuardInstalled) return;
+  GestureBinding.instance.pointerRouter.addGlobalRoute(_absorbZeroOffsetPointerEvent);
+  _zeroOffsetPointerGuardInstalled = true;
+}
+
+void _absorbZeroOffsetPointerEvent(PointerEvent event) {
+  if (event.position == Offset.zero) {
+    GestureBinding.instance.cancelPointer(event.pointer);
+  }
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  _installZeroOffsetPointerGuard(); // Workaround for iPadOS 26.1+ modal dismissal bug
 
   // Initialize settings first to get saved locale
   final settings = await SettingsService.getInstance();
@@ -48,6 +72,9 @@ void main() async {
 
   // Initialize localization with saved locale
   LocaleSettings.setLocale(savedLocale);
+
+  // Needed for formatting dates in different locales
+  await initializeDateFormatting(savedLocale.languageCode, null);
 
   // Configure image cache for large libraries
   PaintingBinding.instance.imageCache.maximumSizeBytes = 200 << 20; // 200MB
@@ -60,9 +87,11 @@ void main() async {
     futures.add(windowManager.ensureInitialized());
   }
 
-  // Initialize TV detection for Android
+  // Initialize TV detection and PiP service for Android
   if (Platform.isAndroid) {
     futures.add(TvDetectionService.getInstance().then((_) {}));
+    // Initialize PiP service to listen for PiP state changes
+    PipService();
   }
 
   // Configure macOS window with custom titlebar (depends on window manager)
@@ -90,11 +119,68 @@ void main() async {
   // Initialize gamepad service for desktop platforms
   if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
     GamepadService.instance.start();
+    DiscordRPCService.instance.initialize();
   }
 
   // DTD service is available for MCP tooling connection if needed
 
+  // Register bundled shader licenses
+  _registerShaderLicenses();
+
   runApp(const MainApp());
+}
+
+void _registerShaderLicenses() {
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks(
+      ['Anime4K'],
+      'MIT License\n'
+      '\n'
+      'Copyright (c) 2019-2021 bloc97\n'
+      'All rights reserved.\n'
+      '\n'
+      'Permission is hereby granted, free of charge, to any person obtaining a copy '
+      'of this software and associated documentation files (the "Software"), to deal '
+      'in the Software without restriction, including without limitation the rights '
+      'to use, copy, modify, merge, publish, distribute, sublicense, and/or sell '
+      'copies of the Software, and to permit persons to whom the Software is '
+      'furnished to do so, subject to the following conditions:\n'
+      '\n'
+      'The above copyright notice and this permission notice shall be included in all '
+      'copies or substantial portions of the Software.\n'
+      '\n'
+      'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR '
+      'IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, '
+      'FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE '
+      'AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER '
+      'LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, '
+      'OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE '
+      'SOFTWARE.',
+    );
+    yield LicenseEntryWithLineBreaks(
+      ['NVIDIA Image Scaling (NVScaler)'],
+      'The MIT License (MIT)\n'
+      '\n'
+      'Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n'
+      '\n'
+      'Permission is hereby granted, free of charge, to any person obtaining a copy of '
+      'this software and associated documentation files (the "Software"), to deal in '
+      'the Software without restriction, including without limitation the rights to '
+      'use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of '
+      'the Software, and to permit persons to whom the Software is furnished to do so, '
+      'subject to the following conditions:\n'
+      '\n'
+      'The above copyright notice and this permission notice shall be included in all '
+      'copies or substantial portions of the Software.\n'
+      '\n'
+      'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR '
+      'IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS '
+      'FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR '
+      'COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER '
+      'IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN '
+      'CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.',
+    );
+  });
 }
 
 // Global RouteObserver for tracking navigation
@@ -128,6 +214,7 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     PlexApiCache.initialize(_appDatabase);
 
     _downloadManager = DownloadManagerService(database: _appDatabase, storageService: DownloadStorageService.instance);
+    _downloadManager.recoverInterruptedDownloads();
 
     _offlineWatchSyncService = OfflineWatchSyncService(database: _appDatabase, serverManager: _serverManager);
 
@@ -163,9 +250,6 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        // Legacy provider for backward compatibility
-        ChangeNotifierProvider(create: (context) => PlexClientProvider()),
-        // New multi-server providers
         ChangeNotifierProvider(create: (context) => MultiServerProvider(_serverManager, _aggregationService)),
         ChangeNotifierProvider(create: (context) => ServerStateProvider()),
         // Offline mode provider - depends on MultiServerProvider
@@ -219,8 +303,10 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
         ChangeNotifierProvider(create: (context) => ThemeProvider()),
         ChangeNotifierProvider(create: (context) => SettingsProvider(), lazy: true),
         ChangeNotifierProvider(create: (context) => HiddenLibrariesProvider(), lazy: true),
+        ChangeNotifierProvider(create: (context) => LibrariesProvider()),
         ChangeNotifierProvider(create: (context) => PlaybackStateProvider()),
         ChangeNotifierProvider(create: (context) => WatchTogetherProvider()),
+        ChangeNotifierProvider(create: (context) => ShaderProvider()),
       ],
       child: Consumer<ThemeProvider>(
         builder: (context, themeProvider, child) {
@@ -232,7 +318,7 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
                 theme: themeProvider.lightTheme,
                 darkTheme: themeProvider.darkTheme,
                 themeMode: themeProvider.materialThemeMode,
-                navigatorObservers: [routeObserver],
+                navigatorObservers: [routeObserver, BackKeySuppressorObserver()],
                 home: const OrientationAwareSetup(),
               ),
             ),
@@ -281,84 +367,9 @@ class _SetupScreenState extends State<SetupScreen> {
     _loadSavedCredentials();
   }
 
-  Future<void> _checkForUpdatesOnStartup() async {
-    // Delay slightly to allow UI to settle
-    await Future.delayed(const Duration(milliseconds: 500));
-
-    if (!mounted) return;
-
-    try {
-      final updateInfo = await UpdateService.checkForUpdatesOnStartup();
-
-      if (updateInfo != null && updateInfo['hasUpdate'] == true && mounted) {
-        _showUpdateDialog(updateInfo);
-      }
-    } catch (e) {
-      appLogger.e('Error checking for updates', error: e);
-    }
-  }
-
-  void _showUpdateDialog(Map<String, dynamic> updateInfo) {
-    showDialog(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: Text(t.update.available),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                t.update.versionAvailable(version: updateInfo['latestVersion']),
-                style: Theme.of(dialogContext).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                t.update.currentVersion(version: updateInfo['currentVersion']),
-                style: Theme.of(dialogContext).textTheme.bodySmall,
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(dialogContext);
-              },
-              child: Text(t.common.later),
-            ),
-            TextButton(
-              onPressed: () async {
-                await UpdateService.skipVersion(updateInfo['latestVersion']);
-                if (dialogContext.mounted) {
-                  Navigator.pop(dialogContext);
-                }
-              },
-              child: Text(t.update.skipVersion),
-            ),
-            FilledButton(
-              onPressed: () async {
-                final url = Uri.parse(updateInfo['releaseUrl']);
-                if (await canLaunchUrl(url)) {
-                  await launchUrl(url, mode: LaunchMode.externalApplication);
-                }
-                if (dialogContext.mounted) {
-                  Navigator.pop(dialogContext);
-                }
-              },
-              child: Text(t.update.viewRelease),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   Future<void> _loadSavedCredentials() async {
     final storage = await StorageService.getInstance();
     final registry = ServerRegistry(storage);
-
-    // Migrate from single-server to multi-server if needed
-    await registry.migrateFromSingleServer();
 
     // Refresh servers from API to get updated connection info (IPs may change)
     await registry.refreshServersFromApi();
@@ -367,72 +378,44 @@ class _SetupScreenState extends State<SetupScreen> {
     final servers = await registry.getServers();
 
     if (servers.isEmpty) {
-      // No servers configured - show auth screen
       if (mounted) {
         Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const AuthScreen()));
       }
       return;
     }
 
-    // Get multi-server provider
     if (!mounted) return;
-    final multiServerProvider = Provider.of<MultiServerProvider>(context, listen: false);
 
     try {
-      appLogger.i('Connecting to ${servers.length} servers...');
-
-      // Get or generate client identifier
-      final clientId = storage.getClientIdentifier();
-
-      // Connect to all servers in parallel
-      final connectedCount = await multiServerProvider.serverManager.connectToAllServers(
-        servers,
-        clientIdentifier: clientId,
-        timeout: const Duration(seconds: 10),
-        onServerConnected: (serverId, client) {
-          // Set first connected client in legacy provider for backward compatibility
-          final legacyProvider = Provider.of<PlexClientProvider>(context, listen: false);
-          if (legacyProvider.client == null) {
-            legacyProvider.setClient(client);
-          }
-        },
+      final result = await ServerConnectionOrchestrator.connectAndInitialize(
+        servers: servers,
+        multiServerProvider: context.read<MultiServerProvider>(),
+        librariesProvider: context.read<LibrariesProvider>(),
+        syncService: context.read<OfflineWatchSyncService>(),
+        clientIdentifier: storage.getClientIdentifier(),
       );
 
-      if (connectedCount > 0) {
-        // At least one server connected successfully
-        appLogger.i('Successfully connected to $connectedCount servers');
+      if (!mounted) return;
 
-        if (mounted) {
-          // Now that Plex clients are available, trigger initial watch sync
-          context.read<OfflineWatchSyncService>().onServersConnected();
-
-          // Navigate to main screen immediately
-          // Get first connected client for backward compatibility
-          final firstClient = multiServerProvider.serverManager.onlineClients.values.first;
-
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => MainScreen(client: firstClient)));
-
-          // Check for updates in background after navigation
-          _checkForUpdatesOnStartup();
-        }
+      if (result.hasConnections) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => MainScreen(client: result.firstClient!)),
+        );
       } else {
-        // All connections failed - navigate to offline mode
-        appLogger.w('Failed to connect to any servers, entering offline mode');
-
-        if (mounted) {
-          // Navigate to MainScreen in offline mode
-          // User can still access Downloads and Settings
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (context) => const MainScreen(isOfflineMode: true)),
-          );
-        }
+        await context.read<DownloadProvider>().ensureInitialized();
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const MainScreen(isOfflineMode: true)),
+        );
       }
     } catch (e, stackTrace) {
       appLogger.e('Error during multi-server connection', error: e, stackTrace: stackTrace);
 
       if (mounted) {
-        // Navigate to MainScreen in offline mode
+        await context.read<DownloadProvider>().ensureInitialized();
+        if (!mounted) return;
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const MainScreen(isOfflineMode: true)),

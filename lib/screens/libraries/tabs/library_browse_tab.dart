@@ -1,14 +1,22 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:provider/provider.dart';
 import 'package:dio/dio.dart';
+import '../../../focus/dpad_navigator.dart';
 import '../../../../services/plex_client.dart';
 import '../../../models/plex_metadata.dart';
 import '../../../models/plex_filter.dart';
+import '../../../models/plex_first_character.dart';
 import '../../../models/plex_sort.dart';
 import '../../../providers/settings_provider.dart';
 import '../../../utils/error_message_utils.dart';
 import '../../../utils/grid_size_calculator.dart';
+import '../../../utils/layout_constants.dart';
+import '../../../widgets/alpha_jump_bar.dart';
+import '../../../widgets/alpha_jump_helper.dart';
+import '../../../widgets/alpha_scroll_handle.dart';
 import '../../../widgets/focusable_media_card.dart';
 import '../../../widgets/focusable_filter_chip.dart';
 import '../../../widgets/media_grid_delegate.dart';
@@ -18,9 +26,14 @@ import '../filters_bottom_sheet.dart';
 import '../sort_bottom_sheet.dart';
 import '../state_messages.dart';
 import '../../../services/storage_service.dart';
-import '../../../services/settings_service.dart' show ViewMode;
+import '../../../services/settings_service.dart' show ViewMode, EpisodePosterMode;
+import '../../../mixins/grid_focus_node_mixin.dart';
 import '../../../mixins/item_updatable.dart';
+import '../../../mixins/deletion_aware.dart';
+import '../../../utils/deletion_notifier.dart';
+import '../../../utils/platform_detector.dart';
 import '../../../i18n/strings.g.dart';
+import '../../main_screen.dart';
 import 'base_library_tab.dart';
 
 /// Browse tab for library screen
@@ -42,9 +55,64 @@ class LibraryBrowseTab extends BaseLibraryTab<PlexMetadata> {
 }
 
 class _LibraryBrowseTabState extends BaseLibraryTabState<PlexMetadata, LibraryBrowseTab>
-    with ItemUpdatable, LibraryTabFocusMixin {
+    with ItemUpdatable, LibraryTabFocusMixin, GridFocusNodeMixin, DeletionAware {
   @override
   PlexClient get client => getClientForLibrary();
+
+  String _toGlobalKey(String ratingKey, {String? serverId}) =>
+      '${serverId ?? widget.library.serverId ?? ''}:$ratingKey';
+
+  @override
+  String? get deletionServerId => widget.library.serverId;
+
+  @override
+  Set<String>? get deletionRatingKeys => items.map((e) => e.ratingKey).toSet();
+
+  @override
+  Set<String>? get deletionGlobalKeys {
+    if (items.isEmpty) return <String>{};
+
+    final keys = <String>{};
+    for (final item in items) {
+      final serverId = item.serverId ?? widget.library.serverId;
+      if (serverId == null) return null;
+      keys.add(_toGlobalKey(item.ratingKey, serverId: serverId));
+    }
+    return keys;
+  }
+
+  @override
+  void onDeletionEvent(DeletionEvent event) {
+    // If we have an item that matches the rating key exactly, then remove it from our list
+    final index = items.indexWhere((e) => e.ratingKey == event.ratingKey);
+    if (index != -1) {
+      setState(() {
+        items.removeAt(index);
+      });
+      return;
+    }
+
+    // If a child item was delete, then update our list to reflect that.
+    // If all children were deleted, remove our item.
+    // Otherwise, just update the counts.
+    for (final parentKey in event.parentChain) {
+      final parentIndex = items.indexWhere((e) => e.ratingKey == parentKey);
+      if (parentIndex != -1) {
+        final item = items[parentIndex];
+        final newLeafCount = (item.leafCount ?? 1) - event.leafCount;
+        if (newLeafCount <= 0) {
+          setState(() {
+            items.removeAt(parentIndex);
+          });
+        } else {
+          setState(() {
+            items[parentIndex] = item.copyWith(leafCount: newLeafCount);
+          });
+        }
+        return;
+      }
+    }
+  }
 
   @override
   String get focusNodeDebugLabel => 'browse_first_item';
@@ -70,6 +138,27 @@ class _LibraryBrowseTabState extends BaseLibraryTabState<PlexMetadata, LibraryBr
   bool _isSortDescending = false;
   String _selectedGrouping = 'all'; // all, seasons, episodes, folders
 
+  // Alpha jump bar state
+  List<PlexFirstCharacter> _firstCharacters = [];
+  AlphaJumpHelper _alphaHelper = AlphaJumpHelper(const []);
+  int _currentFirstVisibleIndex = 0;
+  int _currentColumnCount = 1;
+  double _lastCrossAxisExtent = 0;
+  double _effectiveTopPadding = _gridTopPadding;
+  final FocusNode _alphaJumpBarFocusNode = FocusNode(debugLabel: 'alpha_jump_bar');
+  // When the user taps a letter, pin the highlight so scroll-based recalculation
+  // doesn't immediately override it (e.g. when the letter has fewer items than a full row).
+  bool _hasJumpPin = false;
+  // True while a jump-triggered animateTo is in progress — suppresses all
+  // scroll-based letter recalculation to prevent flashing.
+  bool _isJumpScrolling = false;
+  // Incremented on each jump so that overlapping animations don't clobber each other.
+  int _jumpScrollGeneration = 0;
+
+  // Scroll activity tracking (for phone scroll handle)
+  bool _isScrollActive = false;
+  Timer? _scrollActivityTimer;
+
   // Pagination state
   int _currentPage = 0;
   bool _hasMoreItems = true;
@@ -82,12 +171,26 @@ class _LibraryBrowseTabState extends BaseLibraryTabState<PlexMetadata, LibraryBr
   final FocusNode _filtersChipFocusNode = FocusNode(debugLabel: 'filters_chip');
   final FocusNode _sortChipFocusNode = FocusNode(debugLabel: 'sort_chip');
 
+  // Scroll controller for the CustomScrollView
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScrollChanged);
+  }
+
   @override
   void dispose() {
     _cancelToken?.cancel();
+    _scrollActivityTimer?.cancel();
+    _scrollController.removeListener(_onScrollChanged);
+    _scrollController.dispose();
     _groupingChipFocusNode.dispose();
     _filtersChipFocusNode.dispose();
     _sortChipFocusNode.dispose();
+    _alphaJumpBarFocusNode.dispose();
+    disposeGridFocusNodes();
     super.dispose();
   }
 
@@ -136,6 +239,23 @@ class _LibraryBrowseTabState extends BaseLibraryTabState<PlexMetadata, LibraryBr
     }
   }
 
+  /// Height of the chips bar (padding + chip + padding)
+  static const double _chipsBarHeight = 48.0;
+
+  /// Focus the chips bar (for navigating from tab bar to content).
+  /// Called by libraries screen when pressing DOWN on tab bar.
+  void focusChipsBar() {
+    // If in folders mode, no chips to focus - go directly to folder tree
+    if (_selectedGrouping == 'folders') {
+      focusFirstItem();
+      return;
+    }
+
+    // With Stack layout, chips are always visible on top of the grid.
+    // No need to scroll - just focus the chip.
+    _groupingChipFocusNode.requestFocus();
+  }
+
   Future<void> _loadContent() async {
     // Cancel any pending request
     _cancelToken?.cancel();
@@ -158,6 +278,9 @@ class _LibraryBrowseTabState extends BaseLibraryTabState<PlexMetadata, LibraryBr
       _selectedSort = null;
       _isSortDescending = false;
       _selectedGrouping = _getDefaultGrouping();
+      _firstCharacters = [];
+      _alphaHelper = AlphaJumpHelper(const []);
+      _currentFirstVisibleIndex = 0;
     });
 
     try {
@@ -194,8 +317,8 @@ class _LibraryBrowseTabState extends BaseLibraryTabState<PlexMetadata, LibraryBr
         }
       });
 
-      // Load items
-      await _loadItems();
+      // Load items and first characters in parallel
+      await Future.wait([_loadItems(), _loadFirstCharacters()]);
     } catch (e) {
       _handleLoadError(e, currentRequestId);
     }
@@ -219,6 +342,10 @@ class _LibraryBrowseTabState extends BaseLibraryTabState<PlexMetadata, LibraryBr
       isLoading = true;
       if (!loadMore) {
         items = [];
+        // Increment content version when loading fresh content
+        // This invalidates the last focused index
+        gridContentVersion++;
+        cleanupGridFocusNodes(items.length);
       }
     });
 
@@ -351,40 +478,51 @@ class _LibraryBrowseTabState extends BaseLibraryTabState<PlexMetadata, LibraryBr
   }
 
   void _showGroupingBottomSheet() {
+    SelectKeyUpSuppressor.suppressSelectUntilKeyUp();
+    var pendingGrouping = _selectedGrouping;
     showModalBottomSheet(
       context: context,
       builder: (sheetContext) {
         final options = _getGroupingOptions();
-        return RadioGroup<String>(
-          groupValue: _selectedGrouping,
-          onChanged: (value) async {
-            if (value == null) return;
-            setState(() {
-              _selectedGrouping = value;
-            });
-
-            final storage = await StorageService.getInstance();
-            await storage.saveLibraryGrouping(widget.library.globalKey, value);
-
-            if (!sheetContext.mounted || !mounted) return;
-
-            Navigator.pop(sheetContext);
-            _loadItems();
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return ListView.builder(
+              shrinkWrap: true,
+              itemCount: options.length,
+              itemBuilder: (context, index) {
+                final grouping = options[index];
+                return RadioListTile<String>(
+                  title: Text(_getGroupingLabel(grouping)),
+                  value: grouping,
+                  groupValue: pendingGrouping,
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setSheetState(() {
+                      pendingGrouping = value;
+                    });
+                  },
+                );
+              },
+            );
           },
-          child: ListView.builder(
-            shrinkWrap: true,
-            itemCount: options.length,
-            itemBuilder: (context, index) {
-              final grouping = options[index];
-              return RadioListTile<String>(title: Text(_getGroupingLabel(grouping)), value: grouping);
-            },
-          ),
         );
       },
-    );
+    ).then((_) {
+      if (!mounted) return;
+      if (pendingGrouping == _selectedGrouping) return;
+      setState(() {
+        _selectedGrouping = pendingGrouping;
+      });
+      StorageService.getInstance().then((storage) {
+        storage.saveLibraryGrouping(widget.library.globalKey, pendingGrouping);
+      });
+      _loadItems();
+      _loadFirstCharacters();
+    });
   }
 
   void _showFiltersBottomSheet() {
+    SelectKeyUpSuppressor.suppressSelectUntilKeyUp();
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -392,6 +530,7 @@ class _LibraryBrowseTabState extends BaseLibraryTabState<PlexMetadata, LibraryBr
         filters: _filters,
         selectedFilters: _selectedFilters,
         serverId: widget.library.serverId!,
+        libraryKey: widget.library.globalKey,
         onFiltersChanged: (filters) async {
           setState(() {
             _selectedFilters.clear();
@@ -403,12 +542,19 @@ class _LibraryBrowseTabState extends BaseLibraryTabState<PlexMetadata, LibraryBr
           await storage.saveLibraryFilters(filters, sectionId: widget.library.globalKey);
 
           _loadItems();
+          _loadFirstCharacters();
         },
       ),
     );
   }
 
   void _showSortBottomSheet() {
+    SelectKeyUpSuppressor.suppressSelectUntilKeyUp();
+    // Track pending state in local variables so the callbacks don't trigger
+    // setState/_loadItems while the sheet is open (which would steal focus).
+    PlexSort? pendingSort = _selectedSort;
+    bool pendingDescending = _isSortDescending;
+    bool pendingCleared = false;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -417,25 +563,69 @@ class _LibraryBrowseTabState extends BaseLibraryTabState<PlexMetadata, LibraryBr
         selectedSort: _selectedSort,
         isSortDescending: _isSortDescending,
         onSortChanged: (sort, descending) {
-          setState(() {
-            _selectedSort = sort;
-            _isSortDescending = descending;
-          });
-
-          StorageService.getInstance().then((storage) {
-            storage.saveLibrarySort(widget.library.globalKey, sort.key, descending: descending);
-          });
-
-          _loadItems();
+          pendingSort = sort;
+          pendingDescending = descending;
+          pendingCleared = false;
+        },
+        onClear: () {
+          pendingSort = null;
+          pendingDescending = false;
+          pendingCleared = true;
         },
       ),
-    );
+    ).then((_) {
+      if (!mounted) return;
+      if (pendingCleared) {
+        setState(() {
+          _selectedSort = null;
+          _isSortDescending = false;
+        });
+        _loadItems();
+        _loadFirstCharacters();
+      } else if (pendingSort != null &&
+          (pendingSort!.key != _selectedSort?.key || pendingDescending != _isSortDescending)) {
+        setState(() {
+          _selectedSort = pendingSort;
+          _isSortDescending = pendingDescending;
+        });
+        StorageService.getInstance().then((storage) {
+          storage.saveLibrarySort(widget.library.globalKey, pendingSort!.key, descending: pendingDescending);
+        });
+        _loadItems();
+        _loadFirstCharacters();
+      }
+    });
   }
 
-  /// Navigate focus from chips down to the first grid item
+  /// Navigate focus from chips down to the grid item.
+  /// Restores focus to the previously focused item if content hasn't changed.
   void _navigateToGrid() {
-    if (items.isNotEmpty) {
+    if (items.isEmpty) return;
+
+    final targetIndex = shouldRestoreGridFocus && lastFocusedGridIndex! < items.length ? lastFocusedGridIndex! : 0;
+
+    // Use firstItemFocusNode for index 0 (matches _buildMediaCardItem)
+    if (targetIndex == 0) {
       firstItemFocusNode.requestFocus();
+    } else {
+      getGridItemFocusNode(targetIndex, prefix: 'browse_grid_item').requestFocus();
+    }
+  }
+
+  /// Navigate from the alpha jump bar to the nearest visible grid item.
+  /// After a jump-scroll the previously focused item is off-screen (and its
+  /// FocusNode detached), so we target the last-column item in the first
+  /// visible row — the grid cell closest to the alpha bar.
+  void _navigateToGridNearScroll() {
+    if (items.isEmpty || _currentColumnCount < 1) return;
+
+    final row = _currentFirstVisibleIndex ~/ _currentColumnCount;
+    final targetIndex = ((row + 1) * _currentColumnCount - 1).clamp(0, items.length - 1);
+
+    if (targetIndex == 0) {
+      firstItemFocusNode.requestFocus();
+    } else {
+      getGridItemFocusNode(targetIndex, prefix: 'browse_grid_item').requestFocus();
     }
   }
 
@@ -444,142 +634,446 @@ class _LibraryBrowseTabState extends BaseLibraryTabState<PlexMetadata, LibraryBr
     _groupingChipFocusNode.requestFocus();
   }
 
-  /// Calculate the number of columns in the current grid based on screen width
-  int _getGridColumnCount(BuildContext context, SettingsProvider settingsProvider) {
-    final screenWidth = MediaQuery.of(context).size.width - 16; // Subtract padding
-    final maxCrossAxisExtent = GridSizeCalculator.getMaxCrossAxisExtent(context, settingsProvider.libraryDensity);
-    return (screenWidth / maxCrossAxisExtent).floor().clamp(1, 100);
+  /// Navigate focus to the sidebar
+  void _navigateToSidebar() {
+    MainScreenFocusScope.of(context)?.focusSidebar();
   }
 
-  /// Check if the given index is in the first row of the grid
-  bool _isFirstRow(int index, int columnCount) {
-    return index < columnCount;
+  /// Navigate focus to the alpha jump bar
+  void _navigateToAlphaJumpBar() {
+    _alphaJumpBarFocusNode.requestFocus();
+  }
+
+  /// Whether the device is a phone (not tablet/desktop/TV).
+  bool _isPhone(BuildContext context) => PlatformDetector.isPhone(context);
+
+  /// Whether the alpha jump bar should be shown.
+  /// Only shown when sorting by title (titleSort) and not in folders mode.
+  bool get _shouldShowAlphaJumpBar {
+    if (_selectedGrouping == 'folders') return false;
+    if (_firstCharacters.isEmpty) return false;
+    // Show when no sort is selected (default is titleSort) or when explicitly sorting by title
+    final sortKey = _selectedSort?.key ?? '';
+    return sortKey.isEmpty || sortKey.startsWith('titleSort');
+  }
+
+  /// Fetch first characters for the current library/filter state
+  Future<void> _loadFirstCharacters() async {
+    final client = getClientForLibrary();
+    final filterParams = Map<String, String>.from(_selectedFilters);
+    final typeId = _getGroupingTypeId();
+
+    try {
+      final chars = await client.getFirstCharacters(
+        widget.library.key,
+        type: typeId.isNotEmpty ? int.tryParse(typeId) : null,
+        filters: filterParams.isNotEmpty ? filterParams : null,
+      );
+      if (mounted) {
+        setState(() {
+          _firstCharacters = chars;
+          _alphaHelper = AlphaJumpHelper(chars);
+        });
+      }
+    } catch (_) {
+      // Non-critical — hide the bar on failure
+      if (mounted) {
+        setState(() {
+          _firstCharacters = [];
+          _alphaHelper = AlphaJumpHelper(const []);
+        });
+      }
+    }
+  }
+
+  /// Track scroll position to highlight the current letter in the jump bar
+  void _onScrollChanged() {
+    if (!_shouldShowAlphaJumpBar || _currentColumnCount < 1) return;
+
+    // During a jump animation, skip all processing to avoid flashing.
+    if (_isJumpScrolling) return;
+
+    // If pinned from a completed jump, the next scroll event must be
+    // user-initiated (touch drag, mouse wheel, etc.) — clear the pin
+    // and resume normal tracking.
+    if (_hasJumpPin) {
+      _hasJumpPin = false;
+    }
+
+    _updateVisibleIndex();
+  }
+
+  /// Recompute the first-visible-index from the current scroll offset.
+  void _updateVisibleIndex() {
+    final offset = _scrollController.offset;
+    final firstInRow = _itemIndexFromScrollOffset(offset);
+    // Use the last item in the first visible row so the highlighted letter
+    // updates as soon as items with a new letter appear in that row.
+    final lastInRow = (firstInRow + _currentColumnCount - 1).clamp(0, items.length - 1);
+    if (lastInRow != _currentFirstVisibleIndex) {
+      setState(() => _currentFirstVisibleIndex = lastInRow);
+    }
+  }
+
+  /// Compute the first visible item index from a scroll offset.
+  /// The visible area starts below the chips bar, so we offset accordingly.
+  int _itemIndexFromScrollOffset(double offset) {
+    if (_lastCrossAxisExtent <= 0 || _currentColumnCount < 1) return 0;
+
+    final itemWidth = _lastCrossAxisExtent / _currentColumnCount;
+    final itemHeight = itemWidth / GridLayoutConstants.posterAspectRatio;
+    final rowHeight = itemHeight + GridLayoutConstants.mainAxisSpacing;
+    if (rowHeight <= 0) return 0;
+
+    // The visible area starts at _chipsBarHeight from the viewport top.
+    // Grid content starts at _effectiveTopPadding in scroll coordinates.
+    // First visible row = (offset + chipsBarHeight - effectiveTopPadding) / rowHeight
+    final contentOffset = (offset + _chipsBarHeight - _effectiveTopPadding).clamp(0.0, double.infinity);
+    final row = (contentOffset / rowHeight).floor();
+    return (row * _currentColumnCount).clamp(0, items.length - 1);
+  }
+
+  /// Scroll to the item at [targetIndex], loading more pages if necessary.
+  /// Pins the index so scroll events during the animation don't override
+  /// the highlighted letter. The pin is cleared on the next user scroll.
+  ///
+  /// The [targetIndex] comes from [AlphaJumpHelper] which derives cumulative
+  /// indices from the `firstCharacters` API. That API may count by display
+  /// title (e.g. "The Simpsons" → T), while the grid sorts by `titleSort`
+  /// (e.g. "Simpsons" → S). We correct for this by searching the loaded
+  /// items' `titleSort` for the true start of the target letter.
+  void _jumpToIndex(int targetIndex) {
+    _jumpScrollGeneration++;
+    _isJumpScrolling = true;
+
+    // Determine the intended letter from the helper's model
+    final targetLetter = _alphaHelper.currentLetter(targetIndex);
+
+    // Correct the index using actual items' titleSort when available
+    final correctedIndex = _findFirstItemForLetter(targetLetter) ?? targetIndex;
+
+    _hasJumpPin = true;
+    setState(() => _currentFirstVisibleIndex = correctedIndex);
+
+    if (correctedIndex < items.length) {
+      _scrollToItemIndex(correctedIndex);
+    } else {
+      _loadUntilIndex(correctedIndex);
+    }
+  }
+
+  /// Returns the first character (A-Z or #) of an item's sort title.
+  static String _sortTitleFirstChar(String title) {
+    if (title.isEmpty) return '#';
+    final ch = title[0].toUpperCase();
+    return ch.codeUnitAt(0) >= 65 && ch.codeUnitAt(0) <= 90 ? ch : '#';
+  }
+
+  /// Find the index of the first loaded item whose `titleSort` starts with
+  /// [letter]. Returns null if no match is found (e.g. items not yet loaded).
+  int? _findFirstItemForLetter(String letter) {
+    for (int i = 0; i < items.length; i++) {
+      final sortTitle = items[i].titleSort ?? items[i].title;
+      if (_sortTitleFirstChar(sortTitle) == letter) return i;
+    }
+    return null;
+  }
+
+  /// Scroll the grid so that [index] is visible just below the chips bar
+  void _scrollToItemIndex(int index) {
+    if (_currentColumnCount < 1 || _lastCrossAxisExtent <= 0 || !_scrollController.hasClients) {
+      _isJumpScrolling = false;
+      return;
+    }
+
+    final itemWidth = _lastCrossAxisExtent / _currentColumnCount;
+    final itemHeight = itemWidth / GridLayoutConstants.posterAspectRatio;
+    final rowHeight = itemHeight + GridLayoutConstants.mainAxisSpacing;
+    final targetRow = index ~/ _currentColumnCount;
+    // Position the target row right below the chips bar
+    final offset = _effectiveTopPadding + targetRow * rowHeight - _chipsBarHeight;
+
+    final gen = _jumpScrollGeneration;
+    _scrollController
+        .animateTo(
+          offset.clamp(0.0, _scrollController.position.maxScrollExtent),
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOut,
+        )
+        .then((_) {
+          // Only clear the flag if no newer jump has started.
+          if (mounted && gen == _jumpScrollGeneration) {
+            _isJumpScrolling = false;
+          }
+        });
+  }
+
+  /// Load pages until [targetIndex] is loaded, then scroll to it
+  Future<void> _loadUntilIndex(int targetIndex) async {
+    while (items.length <= targetIndex && _hasMoreItems) {
+      await _loadItems(loadMore: true);
+    }
+    if (mounted) {
+      _scrollToItemIndex(targetIndex.clamp(0, items.length - 1));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     super.build(context); // Required for AutomaticKeepAliveClientMixin
 
-    return Column(
-      children: [
-        // Filter bar with chips
-        Container(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-          alignment: Alignment.centerLeft,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Grouping chip
-                FocusableFilterChip(
-                  focusNode: _groupingChipFocusNode,
-                  icon: Symbols.category_rounded,
-                  label: _getGroupingLabel(_selectedGrouping),
-                  onPressed: _showGroupingBottomSheet,
-                  onNavigateDown: _navigateToGrid,
-                  onNavigateUp: widget.onBack,
-                  onBack: widget.onBack,
-                ),
-                const SizedBox(width: 8),
-                // Filters chip
-                if (_filters.isNotEmpty && _selectedGrouping != 'folders')
-                  FocusableFilterChip(
-                    focusNode: _filtersChipFocusNode,
-                    icon: Symbols.filter_alt_rounded,
-                    label: _selectedFilters.isEmpty
-                        ? t.libraries.filters
-                        : t.libraries.filtersWithCount(count: _selectedFilters.length),
-                    onPressed: _showFiltersBottomSheet,
-                    onNavigateDown: _navigateToGrid,
-                    onNavigateUp: widget.onBack,
-                    onBack: widget.onBack,
-                  ),
-                if (_filters.isNotEmpty && _selectedGrouping != 'folders') const SizedBox(width: 8),
-                // Sort chip
-                if (_sortOptions.isNotEmpty && _selectedGrouping != 'folders')
-                  FocusableFilterChip(
-                    focusNode: _sortChipFocusNode,
-                    icon: Symbols.sort_rounded,
-                    label: _selectedSort?.title ?? t.libraries.sort,
-                    onPressed: _showSortBottomSheet,
-                    onNavigateDown: _navigateToGrid,
-                    onNavigateUp: widget.onBack,
-                    onBack: widget.onBack,
-                  ),
-              ],
+    // For folders mode, use FolderTreeView instead of grid/list
+    if (_selectedGrouping == 'folders') {
+      return Column(
+        children: [
+          _buildChipsBar(),
+          Expanded(
+            child: FolderTreeView(
+              libraryKey: widget.library.key,
+              serverId: widget.library.serverId,
+              onRefresh: updateItem,
             ),
           ),
-        ),
+        ],
+      );
+    }
 
-        // Content
-        Expanded(child: _buildContent()),
+    // For list/grid modes, use Stack with chips layered on top of grid.
+    // This allows the grid to use Clip.none for focus decorations while
+    // the chips bar (with background) covers any overflow at the top.
+    return Stack(
+      children: [
+        // Grid fills the entire area, with top padding for chips bar
+        Positioned.fill(child: _buildScrollableContent()),
+        // Chips bar on top with solid background
+        Positioned(top: 0, left: 0, right: 0, child: _buildChipsBar()),
+        // Alpha jump bar / scroll handle on the right edge
+        if (_shouldShowAlphaJumpBar)
+          Positioned(
+            top: _chipsBarHeight,
+            right: 0,
+            bottom: 0,
+            child: _isPhone(context)
+                ? AlphaScrollHandle(
+                    firstCharacters: _firstCharacters,
+                    onJump: _jumpToIndex,
+                    currentFirstVisibleIndex: _currentFirstVisibleIndex,
+                    isScrolling: _isScrollActive,
+                  )
+                : AlphaJumpBar(
+                    firstCharacters: _firstCharacters,
+                    onJump: _jumpToIndex,
+                    currentFirstVisibleIndex: _currentFirstVisibleIndex,
+                    focusNode: _alphaJumpBarFocusNode,
+                    onNavigateLeft: _navigateToGridNearScroll,
+                    onBack: _navigateToGridNearScroll,
+                  ),
+          ),
       ],
     );
   }
 
-  Widget _buildContent() {
-    // Show folder tree view when in folders mode
-    if (_selectedGrouping == 'folders') {
-      return FolderTreeView(libraryKey: widget.library.key, serverId: widget.library.serverId, onRefresh: updateItem);
-    }
-
-    if (isLoading && items.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    if (errorMessage != null && items.isEmpty) {
-      return ErrorStateWidget(
-        message: errorMessage!,
-        icon: Symbols.error_outline_rounded,
-        onRetry: _loadContent,
-        retryLabel: t.common.retry,
-      );
-    }
-
-    if (items.isEmpty) {
-      return EmptyStateWidget(message: t.libraries.thisLibraryIsEmpty, icon: Symbols.folder_open_rounded);
-    }
-
+  /// Builds the scrollable content (grid/list) with pagination support
+  Widget _buildScrollableContent() {
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
         if (notification.metrics.pixels >= notification.metrics.maxScrollExtent - 300 && _hasMoreItems && !isLoading) {
           _loadItems(loadMore: true);
         }
+        // Track scroll activity for phone scroll handle
+        if (notification is ScrollStartNotification) {
+          if (!_isScrollActive) setState(() => _isScrollActive = true);
+          _scrollActivityTimer?.cancel();
+        } else if (notification is ScrollEndNotification) {
+          _scrollActivityTimer?.cancel();
+          _scrollActivityTimer = Timer(const Duration(milliseconds: 100), () {
+            if (mounted) setState(() => _isScrollActive = false);
+          });
+        }
         return false;
       },
-      child: Consumer<SettingsProvider>(
-        builder: (context, settingsProvider, child) {
-          return _buildItemsView(context, settingsProvider);
-        },
+      child: CustomScrollView(
+        controller: _scrollController,
+        // Allow focus decoration to render outside scroll bounds
+        clipBehavior: Clip.none,
+        slivers: _buildContentSlivers(),
       ),
     );
   }
 
-  /// Builds either a list or grid view based on the view mode
-  Widget _buildItemsView(BuildContext context, SettingsProvider settingsProvider) {
+  /// Whether the filters chip is visible
+  bool get _isFiltersChipVisible => _filters.isNotEmpty && _selectedGrouping != 'folders';
+
+  /// Whether the sort chip is visible
+  bool get _isSortChipVisible => _sortOptions.isNotEmpty && _selectedGrouping != 'folders';
+
+  /// Builds the chips bar widget
+  Widget _buildChipsBar() {
+    return Container(
+      color: Theme.of(context).scaffoldBackgroundColor,
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      alignment: Alignment.centerLeft,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Grouping chip
+          FocusableFilterChip(
+            focusNode: _groupingChipFocusNode,
+            icon: Symbols.category_rounded,
+            label: _getGroupingLabel(_selectedGrouping),
+            onPressed: _showGroupingBottomSheet,
+            onNavigateDown: _navigateToGrid,
+            onNavigateUp: widget.onBack,
+            onNavigateLeft: _navigateToSidebar,
+            onNavigateRight: _isFiltersChipVisible
+                ? () => _filtersChipFocusNode.requestFocus()
+                : _isSortChipVisible
+                ? () => _sortChipFocusNode.requestFocus()
+                : null,
+            onBack: widget.onBack,
+          ),
+          const SizedBox(width: 8),
+          // Filters chip
+          if (_isFiltersChipVisible)
+            FocusableFilterChip(
+              focusNode: _filtersChipFocusNode,
+              icon: Symbols.filter_alt_rounded,
+              label: _selectedFilters.isEmpty
+                  ? t.libraries.filters
+                  : t.libraries.filtersWithCount(count: _selectedFilters.length),
+              onPressed: _showFiltersBottomSheet,
+              onNavigateDown: _navigateToGrid,
+              onNavigateUp: widget.onBack,
+              onNavigateLeft: () => _groupingChipFocusNode.requestFocus(),
+              onNavigateRight: _isSortChipVisible ? () => _sortChipFocusNode.requestFocus() : null,
+              onBack: widget.onBack,
+            ),
+          if (_isFiltersChipVisible) const SizedBox(width: 8),
+          // Sort chip
+          if (_isSortChipVisible)
+            FocusableFilterChip(
+              focusNode: _sortChipFocusNode,
+              icon: Symbols.sort_rounded,
+              label: _selectedSort?.title ?? t.libraries.sort,
+              onPressed: _showSortBottomSheet,
+              onNavigateDown: _navigateToGrid,
+              onNavigateUp: widget.onBack,
+              onNavigateLeft: _isFiltersChipVisible
+                  ? () => _filtersChipFocusNode.requestFocus()
+                  : () => _groupingChipFocusNode.requestFocus(),
+              onBack: widget.onBack,
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Builds content as slivers for the CustomScrollView
+  List<Widget> _buildContentSlivers() {
+    if (isLoading && items.isEmpty) {
+      return [const SliverFillRemaining(child: Center(child: CircularProgressIndicator()))];
+    }
+
+    if (errorMessage != null && items.isEmpty) {
+      return [
+        SliverFillRemaining(
+          child: ErrorStateWidget(
+            message: errorMessage!,
+            icon: Symbols.error_outline_rounded,
+            onRetry: _loadContent,
+            retryLabel: t.common.retry,
+          ),
+        ),
+      ];
+    }
+
+    if (items.isEmpty) {
+      return [
+        SliverFillRemaining(
+          child: EmptyStateWidget(message: t.libraries.thisLibraryIsEmpty, icon: Symbols.folder_open_rounded),
+        ),
+      ];
+    }
+
+    return [
+      Consumer<SettingsProvider>(
+        builder: (context, settingsProvider, child) {
+          return _buildItemsSliver(context, settingsProvider);
+        },
+      ),
+    ];
+  }
+
+  // Top padding for grid content = chips bar height + extra space for focus decoration.
+  // Chips bar is ~48px, focus ring extends ~6px beyond item bounds.
+  // On phone there's no D-pad focus decoration so extra clearance is unnecessary.
+  static const double _gridTopPadding = _chipsBarHeight + 12.0;
+  static const double _gridTopPaddingPhone = _chipsBarHeight;
+
+  /// Width of the alpha jump bar widget
+  static const double _alphaJumpBarWidth = 28.0;
+
+  /// Builds either a sliver list or sliver grid based on the view mode
+  Widget _buildItemsSliver(BuildContext context, SettingsProvider settingsProvider) {
     final itemCount = items.length + (_hasMoreItems && isLoading ? 1 : 0);
+    final isPhone = _isPhone(context);
+    final topPadding = isPhone ? _gridTopPaddingPhone : _gridTopPadding;
+    _effectiveTopPadding = topPadding;
+    final rightPadding = _shouldShowAlphaJumpBar && !isPhone ? _alphaJumpBarWidth : 8.0;
 
     if (settingsProvider.viewMode == ViewMode.list) {
-      // In list view, only the first item can navigate up to chips
-      return ListView.builder(
-        padding: const EdgeInsets.all(8),
-        itemCount: itemCount,
-        itemBuilder: (context, index) => _buildMediaCardItem(index, isFirstRow: index == 0),
+      // In list view, all items are in a single column (first column)
+      return SliverPadding(
+        padding: EdgeInsets.fromLTRB(8, topPadding, rightPadding, 8),
+        sliver: SliverList.builder(
+          itemCount: itemCount,
+          itemBuilder: (context, index) => _buildMediaCardItem(
+            index,
+            isFirstRow: index == 0,
+            isFirstColumn: true, // List view = single column
+          ),
+        ),
       );
     } else {
       // In grid view, calculate columns and pass to item builder
-      final columnCount = _getGridColumnCount(context, settingsProvider);
-      return GridView.builder(
-        padding: const EdgeInsets.all(8),
-        gridDelegate: MediaGridDelegate.createDelegate(context: context, density: settingsProvider.libraryDensity),
-        itemCount: itemCount,
-        itemBuilder: (context, index) => _buildMediaCardItem(index, isFirstRow: _isFirstRow(index, columnCount)),
+      // Use 16:9 aspect ratio when browsing episodes with episode thumbnail mode
+      final useWideRatio =
+          _selectedGrouping == 'episodes' && settingsProvider.episodePosterMode == EpisodePosterMode.episodeThumbnail;
+      final maxExtent = GridSizeCalculator.getMaxCrossAxisExtent(context, settingsProvider.libraryDensity);
+      return SliverPadding(
+        padding: EdgeInsets.fromLTRB(8, topPadding, rightPadding, 8),
+        sliver: SliverLayoutBuilder(
+          builder: (context, constraints) {
+            final columnCount = GridSizeCalculator.getColumnCount(constraints.crossAxisExtent, maxExtent);
+            // Cache grid metrics for alpha jump bar scroll calculations
+            _lastCrossAxisExtent = constraints.crossAxisExtent;
+            _currentColumnCount = columnCount;
+            return SliverGrid.builder(
+              gridDelegate: MediaGridDelegate.createDelegate(
+                context: context,
+                density: settingsProvider.libraryDensity,
+                useWideAspectRatio: useWideRatio,
+              ),
+              itemCount: itemCount,
+              itemBuilder: (context, index) => _buildMediaCardItem(
+                index,
+                isFirstRow: GridSizeCalculator.isFirstRow(index, columnCount),
+                isFirstColumn: GridSizeCalculator.isFirstColumn(index, columnCount),
+                isLastColumn: (index % columnCount) == (columnCount - 1),
+              ),
+            );
+          },
+        ),
       );
     }
   }
 
-  Widget _buildMediaCardItem(int index, {required bool isFirstRow}) {
+  Widget _buildMediaCardItem(
+    int index, {
+    required bool isFirstRow,
+    required bool isFirstColumn,
+    bool isLastColumn = false,
+  }) {
     if (index >= items.length) {
       return const Padding(
         padding: EdgeInsets.all(16.0),
@@ -587,13 +1081,22 @@ class _LibraryBrowseTabState extends BaseLibraryTabState<PlexMetadata, LibraryBr
       );
     }
     final item = items[index];
+
+    // Use firstItemFocusNode for index 0 to maintain compatibility with base class
+    // All other items get managed focus nodes for restoration
+    final focusNode = index == 0 ? firstItemFocusNode : getGridItemFocusNode(index, prefix: 'browse_grid_item');
+
     return FocusableMediaCard(
       key: Key(item.ratingKey),
       item: item,
-      focusNode: index == 0 ? firstItemFocusNode : null,
+      focusNode: focusNode,
       onRefresh: updateItem,
       onNavigateUp: isFirstRow ? _navigateToChips : null,
+      onNavigateLeft: isFirstColumn ? _navigateToSidebar : null,
+      onNavigateRight: isLastColumn && _shouldShowAlphaJumpBar && !_isPhone(context) ? _navigateToAlphaJumpBar : null,
       onBack: widget.onBack,
+      onFocusChange: (hasFocus) => trackGridItemFocus(index, hasFocus),
+      onListRefresh: _loadItems,
     );
   }
 }

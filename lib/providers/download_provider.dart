@@ -11,7 +11,7 @@ import '../services/download_storage_service.dart';
 import '../services/plex_api_cache.dart';
 import '../services/plex_client.dart';
 import '../utils/app_logger.dart';
-import '../utils/plex_cache_parser.dart';
+import '../utils/global_key_utils.dart';
 
 /// Holds Plex thumb path reference for downloaded artwork.
 /// The actual file path is computed from the hash of serverId + thumb path.
@@ -33,6 +33,7 @@ class DownloadProvider extends ChangeNotifier {
   final DownloadManagerService _downloadManager;
   StreamSubscription<DownloadProgress>? _progressSubscription;
   StreamSubscription<DeletionProgress>? _deletionProgressSubscription;
+  late final Future<void> _initFuture;
 
   // Track download progress by globalKey (serverId:ratingKey)
   final Map<String, DownloadProgress> _downloads = {};
@@ -61,8 +62,11 @@ class DownloadProvider extends ChangeNotifier {
     _deletionProgressSubscription = _downloadManager.deletionProgressStream.listen(_onDeletionProgressUpdate);
 
     // Load persisted downloads from database
-    _loadPersistedDownloads();
+    _initFuture = _loadPersistedDownloads();
   }
+
+  /// Ensures persisted downloads have been loaded from disk.
+  Future<void> ensureInitialized() => _initFuture;
 
   /// Load all persisted downloads and metadata from the database/cache
   Future<void> _loadPersistedDownloads() async {
@@ -94,10 +98,8 @@ class DownloadProvider extends ChangeNotifier {
         _artworkPaths[item.globalKey] = DownloadedArtwork(thumbPath: item.thumbPath);
 
         // Load metadata from API cache (base endpoint - chapters/markers included in data)
-        final cached = await apiCache.get(item.serverId, '/library/metadata/${item.ratingKey}');
-        final firstMetadata = PlexCacheParser.extractFirstMetadata(cached);
-        if (firstMetadata != null) {
-          final metadata = PlexMetadata.fromJson(firstMetadata).copyWith(serverId: item.serverId);
+        final metadata = await apiCache.getMetadata(item.serverId, item.ratingKey);
+        if (metadata != null) {
           _metadata[item.globalKey] = metadata;
 
           // For episodes, also load parent (show and season) metadata
@@ -162,10 +164,8 @@ class DownloadProvider extends ChangeNotifier {
     if (showRatingKey != null) {
       final showGlobalKey = '$serverId:$showRatingKey';
       if (!_metadata.containsKey(showGlobalKey)) {
-        final cached = await apiCache.get(serverId, '/library/metadata/$showRatingKey');
-        final showJson = PlexCacheParser.extractFirstMetadata(cached);
-        if (showJson != null) {
-          final showMetadata = PlexMetadata.fromJson(showJson).copyWith(serverId: serverId);
+        final showMetadata = await apiCache.getMetadata(serverId, showRatingKey);
+        if (showMetadata != null) {
           _metadata[showGlobalKey] = showMetadata;
           // Store artwork reference for offline display
           if (showMetadata.thumb != null) {
@@ -180,10 +180,8 @@ class DownloadProvider extends ChangeNotifier {
     if (seasonRatingKey != null) {
       final seasonGlobalKey = '$serverId:$seasonRatingKey';
       if (!_metadata.containsKey(seasonGlobalKey)) {
-        final cached = await apiCache.get(serverId, '/library/metadata/$seasonRatingKey');
-        final seasonJson = PlexCacheParser.extractFirstMetadata(cached);
-        if (seasonJson != null) {
-          final seasonMetadata = PlexMetadata.fromJson(seasonJson).copyWith(serverId: serverId);
+        final seasonMetadata = await apiCache.getMetadata(serverId, seasonRatingKey);
+        if (seasonMetadata != null) {
           _metadata[seasonGlobalKey] = seasonMetadata;
           // Store artwork reference for offline display
           if (seasonMetadata.thumb != null) {
@@ -494,11 +492,11 @@ class DownloadProvider extends ChangeNotifier {
 
     // If no direct progress, check if this is a show or season
     // and calculate aggregate progress from episodes
-    final parts = globalKey.split(':');
-    if (parts.length != 2) return null;
+    final parsed = parseGlobalKey(globalKey);
+    if (parsed == null) return null;
 
-    final serverId = parts[0];
-    final ratingKey = parts[1];
+    final serverId = parsed.serverId;
+    final ratingKey = parsed.ratingKey;
 
     // Try to get metadata to determine type
     final meta = _metadata[globalKey];
@@ -998,19 +996,16 @@ class DownloadProvider extends ChangeNotifier {
     int updatedCount = 0;
 
     for (final globalKey in _metadata.keys.toList()) {
-      final parts = globalKey.split(':');
-      if (parts.length != 2) continue;
+      final parsed = parseGlobalKey(globalKey);
+      if (parsed == null) continue;
 
-      final serverId = parts[0];
-      final ratingKey = parts[1];
+      final serverId = parsed.serverId;
+      final ratingKey = parsed.ratingKey;
 
       try {
-        final cached = await apiCache.get(serverId, '/library/metadata/$ratingKey');
-
-        final firstMetadata = PlexCacheParser.extractFirstMetadata(cached);
-        if (firstMetadata != null) {
-          final metadata = PlexMetadata.fromJson(firstMetadata);
-          _metadata[globalKey] = metadata.copyWith(serverId: serverId);
+        final metadata = await apiCache.getMetadata(serverId, ratingKey);
+        if (metadata != null) {
+          _metadata[globalKey] = metadata;
           updatedCount++;
         }
       } catch (e) {

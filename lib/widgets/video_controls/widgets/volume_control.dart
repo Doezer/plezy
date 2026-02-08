@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:plezy/widgets/app_icon.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:flutter/services.dart';
 
 import '../../../focus/dpad_navigator.dart';
+import '../../../focus/key_event_utils.dart';
 import '../../../mpv/mpv.dart';
 import '../../../services/settings_service.dart';
 import '../../../i18n/strings.g.dart';
@@ -91,15 +93,19 @@ class _VolumeControlState extends State<VolumeControl> {
   }
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
-    if (!event.isActionable) {
-      return KeyEventResult.ignored;
-    }
-
     final key = event.logicalKey;
 
     if (_isAdjustMode) {
+      if (key.isBackKey) {
+        return handleBackKeyAction(event, _exitAdjustMode);
+      }
+
       // Notify activity on any key in adjust mode (to reset hide timer)
       widget.onFocusActivity?.call();
+
+      if (!event.isActionable) {
+        return KeyEventResult.ignored;
+      }
 
       // In adjust mode: left/right adjusts volume, back/escape exits
       if (key == LogicalKeyboardKey.arrowLeft) {
@@ -110,7 +116,7 @@ class _VolumeControlState extends State<VolumeControl> {
         _adjustVolume(_volumeStep);
         return KeyEventResult.handled;
       }
-      if (key.isBackKey || key.isSelectKey) {
+      if (key.isSelectKey) {
         _exitAdjustMode();
         return KeyEventResult.handled;
       }
@@ -122,6 +128,10 @@ class _VolumeControlState extends State<VolumeControl> {
       }
       // Consume other keys in adjust mode
       return KeyEventResult.handled;
+    }
+
+    if (!event.isActionable) {
+      return KeyEventResult.ignored;
     }
 
     // Not in adjust mode: use the provided key event handler for navigation
@@ -203,51 +213,62 @@ class _VolumeControlState extends State<VolumeControl> {
     final showMarker = _maxVolume > 100;
     final markerPosition = showMarker ? (100.0 / maxVolumeDouble) : 0.0;
 
-    return SizedBox(
-      width: 100,
-      child: Stack(
-        alignment: Alignment.centerLeft,
-        children: [
-          // 100% marker (only shown if max > 100)
-          if (showMarker)
-            Positioned(
-              left: 100 * markerPosition - 1, // Adjust for marker width
-              child: Container(
-                width: 2,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.6),
-                  borderRadius: BorderRadius.circular(1),
+    return Listener(
+      onPointerSignal: (event) {
+        if (event is PointerScrollEvent) {
+          final delta = event.scrollDelta.dy;
+          // Scroll up (negative delta) = increase volume, scroll down = decrease
+          final volumeChange = -delta / 20; // Adjust sensitivity (higher = less sensitive)
+          _adjustVolume(volumeChange);
+          widget.onFocusActivity?.call();
+        }
+      },
+      child: SizedBox(
+        width: 100,
+        child: Stack(
+          alignment: Alignment.centerLeft,
+          children: [
+            // 100% marker (only shown if max > 100)
+            if (showMarker)
+              Positioned(
+                left: 100 * markerPosition - 1, // Adjust for marker width
+                child: Container(
+                  width: 2,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.6),
+                    borderRadius: BorderRadius.circular(1),
+                  ),
+                ),
+              ),
+            // Volume slider
+            SliderTheme(
+              data: SliderThemeData(
+                trackHeight: showAdjustIndicator ? 4 : 3,
+                thumbShape: RoundSliderThumbShape(enabledThumbRadius: showAdjustIndicator ? 8 : 6),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+              ),
+              child: Semantics(
+                label: t.videoControls.volumeSlider,
+                slider: true,
+                child: Slider(
+                  value: volume.clamp(0.0, maxVolumeDouble),
+                  min: 0.0,
+                  max: maxVolumeDouble,
+                  onChanged: (value) {
+                    widget.player.setVolume(value);
+                  },
+                  onChangeEnd: (value) async {
+                    final settings = await SettingsService.getInstance();
+                    await settings.setVolume(value);
+                  },
+                  activeColor: Colors.white,
+                  inactiveColor: Colors.white.withValues(alpha: 0.3),
                 ),
               ),
             ),
-          // Volume slider
-          SliderTheme(
-            data: SliderThemeData(
-              trackHeight: showAdjustIndicator ? 4 : 3,
-              thumbShape: RoundSliderThumbShape(enabledThumbRadius: showAdjustIndicator ? 8 : 6),
-              overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-            ),
-            child: Semantics(
-              label: t.videoControls.volumeSlider,
-              slider: true,
-              child: Slider(
-                value: volume.clamp(0.0, maxVolumeDouble),
-                min: 0.0,
-                max: maxVolumeDouble,
-                onChanged: (value) {
-                  widget.player.setVolume(value);
-                },
-                onChangeEnd: (value) async {
-                  final settings = await SettingsService.getInstance();
-                  await settings.setVolume(value);
-                },
-                activeColor: Colors.white,
-                inactiveColor: Colors.white.withValues(alpha: 0.3),
-              ),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
+import '../focus/dpad_navigator.dart';
 
 /// A ListTile that accepts a FocusNode for keyboard/controller navigation.
 ///
 /// Uses Flutter's native ListTile focus support - no custom styling wrapper.
 /// The focusNode allows programmatic focus control (e.g., auto-focus first item).
-class FocusableListTile extends StatelessWidget {
+class FocusableListTile extends StatefulWidget {
   /// The primary content of the list tile.
   final Widget? title;
 
@@ -41,6 +42,12 @@ class FocusableListTile extends StatelessWidget {
   /// The tile's internal padding.
   final EdgeInsetsGeometry? contentPadding;
 
+  /// If true, consumes the first select key event to avoid accidental activation.
+  final bool suppressInitialSelect;
+
+  /// An optional color to display behind the menu item when being hovered.
+  final Color? hoverColor;
+
   const FocusableListTile({
     super.key,
     this.title,
@@ -55,23 +62,53 @@ class FocusableListTile extends StatelessWidget {
     this.focusNode,
     this.autofocus = false,
     this.contentPadding,
+    this.suppressInitialSelect = false,
+    this.hoverColor,
   });
 
   @override
+  State<FocusableListTile> createState() => _FocusableListTileState();
+}
+
+class _FocusableListTileState extends State<FocusableListTile> {
+  bool _suppressionConsumed = false;
+
+  @override
   Widget build(BuildContext context) {
-    return ListTile(
-      title: title,
-      subtitle: subtitle,
-      leading: leading,
-      trailing: trailing,
-      onTap: onTap,
-      onLongPress: onLongPress,
-      dense: dense,
-      enabled: enabled,
-      selected: selected,
-      contentPadding: contentPadding,
-      focusNode: focusNode,
-      autofocus: autofocus,
+    final tile = ListTile(
+      title: widget.title,
+      subtitle: widget.subtitle,
+      leading: widget.leading,
+      trailing: widget.trailing,
+      onTap: widget.onTap,
+      onLongPress: widget.onLongPress,
+      dense: widget.dense,
+      enabled: widget.enabled,
+      selected: widget.selected,
+      contentPadding: widget.contentPadding,
+      focusNode: widget.suppressInitialSelect ? null : widget.focusNode,
+      autofocus: widget.suppressInitialSelect ? false : widget.autofocus,
+      hoverColor: widget.hoverColor,
+    );
+
+    if (!widget.suppressInitialSelect) {
+      return tile;
+    }
+
+    return Focus(
+      focusNode: widget.focusNode,
+      autofocus: widget.autofocus,
+      onKeyEvent: (node, event) {
+        if (SelectKeyUpSuppressor.consumeIfSuppressed(event)) {
+          return KeyEventResult.handled;
+        }
+        if (!_suppressionConsumed && event.logicalKey.isSelectKey) {
+          _suppressionConsumed = true;
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: tile,
     );
   }
 }
@@ -79,6 +116,7 @@ class FocusableListTile extends StatelessWidget {
 /// A RadioListTile that accepts a FocusNode for keyboard/controller navigation.
 ///
 /// Uses Flutter's native RadioListTile focus support - no custom styling wrapper.
+/// Can be used standalone with [groupValue]/[onChanged] or inside a [RadioGroup].
 class FocusableRadioListTile<T> extends StatelessWidget {
   /// The primary content of the list tile.
   final Widget? title;
@@ -91,6 +129,14 @@ class FocusableRadioListTile<T> extends StatelessWidget {
 
   /// The value represented by this radio button.
   final T value;
+
+  /// The currently selected value for the group.
+  /// When provided, the widget works without a [RadioGroup] ancestor.
+  final T? groupValue;
+
+  /// Called when this radio button is selected.
+  /// When provided, the widget works without a [RadioGroup] ancestor.
+  final ValueChanged<T?>? onChanged;
 
   /// Whether this radio button is part of a vertically dense list.
   final bool dense;
@@ -110,6 +156,8 @@ class FocusableRadioListTile<T> extends StatelessWidget {
     this.subtitle,
     this.secondary,
     required this.value,
+    this.groupValue,
+    this.onChanged,
     this.dense = false,
     this.focusNode,
     this.autofocus = false,
@@ -123,6 +171,8 @@ class FocusableRadioListTile<T> extends StatelessWidget {
       subtitle: subtitle,
       secondary: secondary,
       value: value,
+      groupValue: groupValue,
+      onChanged: onChanged,
       dense: dense,
       focusNode: focusNode,
       autofocus: autofocus,

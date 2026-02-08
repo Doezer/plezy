@@ -49,7 +49,6 @@ class ProfileListTile extends StatelessWidget {
             )
           : (showTrailingIcon ? const AppIcon(Symbols.chevron_right_rounded, fill: 1) : null),
       onTap: isCurrentUser ? null : onTap,
-      enabled: !isCurrentUser,
     );
   }
 

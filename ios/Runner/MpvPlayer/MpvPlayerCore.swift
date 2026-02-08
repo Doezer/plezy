@@ -49,10 +49,16 @@ class MpvPlayerCore: NSObject {
     weak var delegate: MpvPlayerDelegate?
 
     private(set) var isInitialized = false
+    private var isDisposing = false  // Flag to prevent race conditions during disposal
 
     // HDR settings
     private var hdrEnabled = true  // User preference for HDR
     private var lastSigPeak: Double = 0.0  // Last known sig-peak for re-evaluation
+
+    // Async command tracking to prevent UI blocking
+    private var pendingCommands: [UInt64: (Result<Void, Error>) -> Void] = [:]
+    private var pendingCommandsLock = NSLock()
+    private var nextRequestId: UInt64 = 1
 
     // MARK: - Initialization
 
@@ -147,7 +153,8 @@ class MpvPlayerCore: NSObject {
         mpv_set_wakeup_callback(
             mpv,
             { ctx in
-                let core = Unmanaged<MpvPlayerCore>.fromOpaque(ctx!).takeUnretainedValue()
+                guard let ctx = ctx else { return }  // Safe guard instead of force unwrap
+                let core = Unmanaged<MpvPlayerCore>.fromOpaque(ctx).takeUnretainedValue()
                 core.readEvents()
             }, UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()))
 
@@ -249,6 +256,50 @@ class MpvPlayerCore: NSObject {
         command(args[0], args: Array(args.dropFirst()))
     }
 
+    /// Execute an MPV command asynchronously to prevent UI blocking.
+    /// Uses mpv_command_async which returns immediately; the completion is called
+    /// when MPV_EVENT_COMMAND_REPLY is received.
+    func commandAsync(_ args: [String], completion: @escaping (Result<Void, Error>) -> Void) {
+        guard let mpv = mpv, !args.isEmpty else {
+            completion(.success(()))
+            return
+        }
+
+        // Generate unique request ID
+        pendingCommandsLock.lock()
+        let requestId = nextRequestId
+        nextRequestId += 1
+        pendingCommands[requestId] = completion
+        pendingCommandsLock.unlock()
+
+        // Build array of C strings for mpv_command_async
+        var cargs: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0) }
+        cargs.append(nil)  // null-terminate
+
+        // mpv_command_async returns immediately
+        cargs.withUnsafeBufferPointer { buffer in
+            var constPtrs = buffer.map { UnsafePointer($0) }
+            let result = mpv_command_async(mpv, requestId, &constPtrs)
+            if result < 0 {
+                // Command submission failed, complete immediately with error
+                pendingCommandsLock.lock()
+                if let pending = pendingCommands.removeValue(forKey: requestId) {
+                    pendingCommandsLock.unlock()
+                    let error = NSError(domain: "mpv", code: Int(result),
+                                        userInfo: [NSLocalizedDescriptionKey: String(cString: mpv_error_string(result))])
+                    DispatchQueue.main.async { pending(.failure(error)) }
+                } else {
+                    pendingCommandsLock.unlock()
+                }
+            }
+        }
+
+        // Free the C strings
+        for ptr in cargs {
+            free(ptr)
+        }
+    }
+
     // MARK: - Visibility
 
     func setVisible(_ visible: Bool) {
@@ -308,7 +359,7 @@ class MpvPlayerCore: NSObject {
 
     private func readEvents() {
         queue.async { [weak self] in
-            guard let self = self, let mpv = self.mpv else { return }
+            guard let self = self, !self.isDisposing, let mpv = self.mpv else { return }
 
             while true {
                 let event = mpv_wait_event(mpv, 0)
@@ -330,6 +381,23 @@ class MpvPlayerCore: NSObject {
             let property = data.assumingMemoryBound(to: mpv_event_property.self).pointee
             let name = String(cString: property.name)
             handlePropertyChange(name: name, property: property)
+
+        case MPV_EVENT_COMMAND_REPLY:
+            // Handle async command completion
+            let requestId = event.reply_userdata
+            pendingCommandsLock.lock()
+            let completion = pendingCommands.removeValue(forKey: requestId)
+            pendingCommandsLock.unlock()
+
+            if let completion = completion {
+                if event.error < 0 {
+                    let error = NSError(domain: "mpv", code: Int(event.error),
+                                        userInfo: [NSLocalizedDescriptionKey: String(cString: mpv_error_string(event.error))])
+                    DispatchQueue.main.async { completion(.failure(error)) }
+                } else {
+                    DispatchQueue.main.async { completion(.success(())) }
+                }
+            }
 
         case MPV_EVENT_FILE_LOADED:
             DispatchQueue.main.async {
@@ -487,12 +555,29 @@ class MpvPlayerCore: NSObject {
     // MARK: - Cleanup
 
     func dispose() {
+        // Set disposing flag first to prevent race conditions with event callbacks
+        isDisposing = true
+
         NotificationCenter.default.removeObserver(self)
+
+        // Cancel any pending async commands
+        pendingCommandsLock.lock()
+        let pending = pendingCommands
+        pendingCommands.removeAll()
+        pendingCommandsLock.unlock()
+
+        // Complete pending commands with cancellation error
+        let cancelError = NSError(domain: "mpv", code: -1,
+                                  userInfo: [NSLocalizedDescriptionKey: "Player disposed"])
+        for (_, completion) in pending {
+            DispatchQueue.main.async { completion(.failure(cancelError)) }
+        }
 
         let mpvHandle = mpv
         mpv = nil
 
-        queue.sync {
+        // Use async to avoid blocking the main thread (prevents deadlock)
+        queue.async {
             if let handle = mpvHandle {
                 mpv_set_wakeup_callback(handle, nil, nil)
                 mpv_terminate_destroy(handle)

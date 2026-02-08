@@ -281,6 +281,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.1.1"
+  dart_discord_presence:
+    dependency: "direct main"
+    description:
+      name: dart_discord_presence
+      sha256: "4679b197eb37af3676766bbfba9f1f766ba27131588237f13ea7085e9dfe068a"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.1.0"
   dart_style:
     dependency: transitive
     description:
@@ -289,14 +297,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.1.1"
-  dart_webrtc:
-    dependency: transitive
-    description:
-      name: dart_webrtc
-      sha256: "51bcda4ba5d7dd9e65a309244ce3ac0b58025e6e1f6d7442cee4cd02134ef65f"
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.6.0"
   dbus:
     dependency: transitive
     description:
@@ -361,14 +361,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.0.3"
-  events_emitter:
-    dependency: transitive
-    description:
-      name: events_emitter
-      sha256: a075477bdf9c8c0c31bb7c7b7bdd357b4486c34f30163119f96de4e7f54abeff
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.5.2"
   fake_async:
     dependency: transitive
     description:
@@ -454,6 +446,11 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "5.0.0"
+  flutter_localizations:
+    dependency: transitive
+    description: flutter
+    source: sdk
+    version: "0.0.0"
   flutter_plugin_android_lifecycle:
     dependency: transitive
     description:
@@ -472,14 +469,6 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
-  flutter_webrtc:
-    dependency: "direct overridden"
-    description:
-      name: flutter_webrtc
-      sha256: "71a38363a5b50603e405c275f30de2eb90f980b0cc94b0e1e9d8b9d6a6b03bf0"
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.2.1"
   frontend_server_client:
     dependency: transitive
     description:
@@ -488,70 +477,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.0.0"
-  gamepads:
-    dependency: "direct main"
-    description:
-      name: gamepads
-      sha256: "3a8a35502f0b3d28ea55e2c6c42320583389c0514a2bdd92ba0440d0cadd628e"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.1.9"
-  gamepads_android:
-    dependency: transitive
-    description:
-      name: gamepads_android
-      sha256: "7913cd171ff06d5b588cb3e1dae64390c6e1352dd2999ff19a96d822eb7441fd"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.1.6"
-  gamepads_darwin:
-    dependency: transitive
-    description:
-      name: gamepads_darwin
-      sha256: "91250975ee196703816c55117502ec53ce4a1b881ca50dec1d0fbcb9fbb75eff"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.1.2+2"
-  gamepads_ios:
-    dependency: transitive
-    description:
-      name: gamepads_ios
-      sha256: "085459e2f677c18c4b15aee5dacc66e0b05491d4ed32bd3041c8328394e00d3a"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.1.3+1"
-  gamepads_linux:
-    dependency: transitive
-    description:
-      name: gamepads_linux
-      sha256: f4c17915a84400d7f624aadb6371424ada596eedff2a25663121453e65917e0d
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.1.1+3"
-  gamepads_platform_interface:
-    dependency: transitive
-    description:
-      name: gamepads_platform_interface
-      sha256: ddab8677a4137d92e381b04cc97a8081ae4b75673dc0f24c846618d2b5226c4f
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.1.2+1"
-  gamepads_web:
-    dependency: transitive
-    description:
-      name: gamepads_web
-      sha256: "4885a792f16de023c4975854ffe17ffccacb46beb1e78ac1ecde76fd10edcb22"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.1.0"
-  gamepads_windows:
-    dependency: transitive
-    description:
-      name: gamepads_windows
-      sha256: "454320638b8ad73890530545a2f788d83a752471010edade0f00b1636c1b382d"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.1.4+1"
   glob:
     dependency: transitive
     description:
@@ -568,46 +493,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.3.2"
-  hotkey_manager:
-    dependency: "direct main"
-    description:
-      name: hotkey_manager
-      sha256: "06f0655b76c8dd322fb7101dc615afbdbf39c3d3414df9e059c33892104479cd"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.2.3"
-  hotkey_manager_linux:
-    dependency: transitive
-    description:
-      name: hotkey_manager_linux
-      sha256: "83676bda8210a3377bc6f1977f193bc1dbdd4c46f1bdd02875f44b6eff9a8473"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.2.0"
-  hotkey_manager_macos:
-    dependency: transitive
-    description:
-      name: hotkey_manager_macos
-      sha256: "03b5967e64357b9ac05188ea4a5df6fe4ed4205762cb80aaccf8916ee1713c96"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.2.0"
-  hotkey_manager_platform_interface:
-    dependency: transitive
-    description:
-      name: hotkey_manager_platform_interface
-      sha256: "98ffca25b8cc9081552902747b2942e3bc37855389a4218c9d50ca316b653b13"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.2.0"
-  hotkey_manager_windows:
-    dependency: transitive
-    description:
-      name: hotkey_manager_windows
-      sha256: "0d03ced9fe563ed0b68f0a0e1b22c9ffe26eb8053cb960e401f68a4f070e0117"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.2.0"
   html:
     dependency: transitive
     description:
@@ -664,6 +549,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.0.5"
+  intl:
+    dependency: "direct main"
+    description:
+      name: intl
+      sha256: "3df61194eb431efc39c4ceba583b95633a403f46c9fd341e550ce0bfa50e9aa5"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.20.2"
   io:
     dependency: transitive
     description:
@@ -680,22 +573,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.6.7"
-  js_interop:
-    dependency: transitive
-    description:
-      name: js_interop
-      sha256: "7ec859c296958ccea34dc770504bd3ff4ae52fdd9e7eeb2bacc7081ad476a1f5"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.0.1"
-  json2yaml:
-    dependency: transitive
-    description:
-      name: json2yaml
-      sha256: da94630fbc56079426fdd167ae58373286f603371075b69bf46d848d63ba3e51
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.0.1"
   json_annotation:
     dependency: "direct main"
     description:
@@ -760,14 +637,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.3.0"
-  macos_window_utils:
-    dependency: "direct main"
-    description:
-      name: macos_window_utils
-      sha256: d4df3501fd32ac0d2d7590cb6a8e4758337d061c8fa0db816fdd636be63a8438
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.9.0"
   matcher:
     dependency: transitive
     description:
@@ -836,8 +705,8 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: "60b3bbbe16773d3862253c97df4b1e0a3b1cd0d4"
-      resolved-ref: "60b3bbbe16773d3862253c97df4b1e0a3b1cd0d4"
+      ref: "6463fd18875ead347e739189b9687307f629f090"
+      resolved-ref: "6463fd18875ead347e739189b9687307f629f090"
       url: "https://github.com/edde746/os-media-controls"
     source: git
     version: "0.2.0"
@@ -921,14 +790,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.3.0"
-  peerdart:
-    dependency: "direct main"
-    description:
-      name: peerdart
-      sha256: "1d0db041d42194f42e57d8889d029fb8d107610bf1062b39f43f4651de547e3c"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.5.6"
   petitparser:
     dependency: transitive
     description:
@@ -1105,22 +966,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.2.0"
-  share_plus:
-    dependency: "direct main"
-    description:
-      name: share_plus
-      sha256: fce43200aa03ea87b91ce4c3ac79f0cecd52e2a7a56c7a4185023c271fbfa6da
-      url: "https://pub.dev"
-    source: hosted
-    version: "10.1.4"
-  share_plus_platform_interface:
-    dependency: transitive
-    description:
-      name: share_plus_platform_interface
-      sha256: cc012a23fc2d479854e6c80150696c4a5f5bb62cb89af4de1c505cf78d0a5d0b
-      url: "https://pub.dev"
-    source: hosted
-    version: "5.0.2"
   shared_preferences:
     dependency: "direct main"
     description:
@@ -1202,26 +1047,26 @@ packages:
     dependency: "direct main"
     description:
       name: slang
-      sha256: a466773de768eb95bdf681e0a92e7c8010d44bb247b62130426c83ece33aeaed
+      sha256: "13e3b6f07adc51ab751e7889647774d294cbce7a3382f81d9e5029acfe9c37b2"
       url: "https://pub.dev"
     source: hosted
-    version: "3.32.0"
+    version: "4.12.0"
   slang_build_runner:
     dependency: "direct dev"
     description:
       name: slang_build_runner
-      sha256: b2e0c63f3c801a4aa70b4ca43173893d6eb7d5a421fc9d97ad983527397631b3
+      sha256: "453d74b5430153a3c4150d5ba8f6380e0785f3939f7511f10ac5b6cf9bb7d2a7"
       url: "https://pub.dev"
     source: hosted
-    version: "3.32.0"
+    version: "4.12.0"
   slang_flutter:
     dependency: "direct main"
     description:
       name: slang_flutter
-      sha256: "1a98e878673996902fa5ef0b61ce5c245e41e4d25640d18af061c6aab917b0c7"
+      sha256: "0a4545cca5404d6b7487cf61cf1fe56c52daeb08de56a7574ee8381fbad035a0"
       url: "https://pub.dev"
     source: hosted
-    version: "3.32.0"
+    version: "4.12.0"
   source_gen:
     dependency: transitive
     description:
@@ -1382,14 +1227,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.4.0"
-  uni_platform:
-    dependency: transitive
+  universal_gamepad:
+    dependency: "direct main"
     description:
-      name: uni_platform
-      sha256: e02213a7ee5352212412ca026afd41d269eb00d982faa552f419ffc2debfad84
+      name: universal_gamepad
+      sha256: e31955d2f9b2a1aa11eebd64a80df6a2a66ccdae309471c447b36b44bf55d1c1
       url: "https://pub.dev"
     source: hosted
-    version: "0.1.3"
+    version: "1.0.0"
   url_launcher:
     dependency: "direct main"
     description:
@@ -1519,21 +1364,13 @@ packages:
     source: hosted
     version: "1.0.1"
   web_socket_channel:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: web_socket_channel
       sha256: d645757fb0f4773d602444000a8131ff5d48c9e47adfe9772652dd1a4f2d45c8
       url: "https://pub.dev"
     source: hosted
     version: "3.0.3"
-  webrtc_interface:
-    dependency: transitive
-    description:
-      name: webrtc_interface
-      sha256: "2e604a31703ad26781782fb14fa8a4ee621154ee2c513d2b9938e486fa695233"
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.3.0"
   win32:
     dependency: transitive
     description:
@@ -1615,5 +1452,5 @@ packages:
     source: hosted
     version: "3.1.3"
 sdks:
-  dart: ">=3.9.2 <4.0.0"
+  dart: ">=3.10.7 <4.0.0"
   flutter: ">=3.35.0"

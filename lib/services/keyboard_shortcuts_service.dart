@@ -2,7 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:hotkey_manager/hotkey_manager.dart';
+import '../models/hotkey_model.dart';
+import '../i18n/strings.g.dart';
 import '../mpv/mpv.dart';
 import 'settings_service.dart';
 import '../utils/player_utils.dart';
@@ -90,64 +91,36 @@ class KeyboardShortcutsService {
   String formatHotkey(HotKey? hotKey) {
     if (hotKey == null) return 'No shortcut set';
 
-    final modifiers = <String>[];
-    for (final modifier in hotKey.modifiers ?? []) {
-      switch (modifier) {
-        case HotKeyModifier.alt:
-          modifiers.add('Alt');
-          break;
-        case HotKeyModifier.control:
-          modifiers.add('Ctrl');
-          break;
-        case HotKeyModifier.shift:
-          modifiers.add('Shift');
-          break;
-        case HotKeyModifier.meta:
-          modifiers.add('Meta');
-          break;
-        case HotKeyModifier.capsLock:
-          modifiers.add('CapsLock');
-          break;
-        case HotKeyModifier.fn:
-          modifiers.add('Fn');
-          break;
-      }
-    }
+    final isMac = Platform.isMacOS;
 
-    // Format the key name
-    String keyName = hotKey.key.keyLabel;
-    if (keyName.startsWith('PhysicalKeyboardKey#')) {
-      keyName = keyName.substring(20, keyName.length - 1);
-    }
-    if (keyName.startsWith('key')) {
-      keyName = keyName.substring(3).toUpperCase();
-    }
+    // macOS standard modifier order: ⌃ ⌥ ⇧ ⌘
+    const macModifierLabels = <HotKeyModifier, String>{
+      HotKeyModifier.control: '\u2303',
+      HotKeyModifier.alt: '\u2325',
+      HotKeyModifier.shift: '\u21e7',
+      HotKeyModifier.meta: '\u2318',
+      HotKeyModifier.capsLock: '\u21ea',
+      HotKeyModifier.fn: 'fn',
+    };
 
-    // Special cases for common keys
-    switch (keyName.toLowerCase()) {
-      case 'space':
-        keyName = 'Space';
-        break;
-      case 'arrowup':
-        keyName = 'Arrow Up';
-        break;
-      case 'arrowdown':
-        keyName = 'Arrow Down';
-        break;
-      case 'arrowleft':
-        keyName = 'Arrow Left';
-        break;
-      case 'arrowright':
-        keyName = 'Arrow Right';
-        break;
-      case 'equal':
-        keyName = 'Plus';
-        break;
-      case 'minus':
-        keyName = 'Minus';
-        break;
-    }
+    const defaultModifierLabels = <HotKeyModifier, String>{
+      HotKeyModifier.alt: 'Alt',
+      HotKeyModifier.control: 'Ctrl',
+      HotKeyModifier.shift: 'Shift',
+      HotKeyModifier.meta: 'Meta',
+      HotKeyModifier.capsLock: 'CapsLock',
+      HotKeyModifier.fn: 'Fn',
+    };
 
+    final labels = isMac ? macModifierLabels : defaultModifierLabels;
+    final modifiers = (hotKey.modifiers ?? []).map((m) => labels[m] ?? m.name).toList();
+
+    // The key label already uses macOS symbols via physicalKeyLabel()
+    final keyName = physicalKeyLabel(hotKey.key);
+
+    if (isMac) {
+      return [...modifiers, keyName].join();
+    }
     return modifiers.isEmpty ? keyName : '${modifiers.join(' + ')} + $keyName';
   }
 
@@ -162,6 +135,7 @@ class KeyboardShortcutsService {
     VoidCallback? onNextChapter,
     VoidCallback? onPreviousChapter, {
     VoidCallback? onBack,
+    VoidCallback? onToggleShader,
   }) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
 
@@ -237,6 +211,7 @@ class KeyboardShortcutsService {
           onNextSubtitleTrack,
           onNextChapter,
           onPreviousChapter,
+          onToggleShader: onToggleShader,
         );
         return KeyEventResult.handled;
       }
@@ -253,8 +228,9 @@ class KeyboardShortcutsService {
     VoidCallback? onNextAudioTrack,
     VoidCallback? onNextSubtitleTrack,
     VoidCallback? onNextChapter,
-    VoidCallback? onPreviousChapter,
-  ) {
+    VoidCallback? onPreviousChapter, {
+    VoidCallback? onToggleShader,
+  }) {
     switch (action) {
       case 'play_pause':
         player.playOrPause();
@@ -305,15 +281,27 @@ class KeyboardShortcutsService {
         onPreviousChapter?.call();
         break;
       case 'speed_increase':
-        final newRate = (player.state.rate + 0.1).clamp(0.1, 3.0);
-        player.setRate(newRate);
+        final newRateUp = (player.state.rate + 0.1).clamp(0.1, 3.0);
+        player.setRate(newRateUp);
+        _settingsService.setDefaultPlaybackSpeed(newRateUp);
         break;
       case 'speed_decrease':
-        final newRate = (player.state.rate - 0.1).clamp(0.1, 3.0);
-        player.setRate(newRate);
+        final newRateDown = (player.state.rate - 0.1).clamp(0.1, 3.0);
+        player.setRate(newRateDown);
+        _settingsService.setDefaultPlaybackSpeed(newRateDown);
         break;
       case 'speed_reset':
         player.setRate(1.0);
+        _settingsService.setDefaultPlaybackSpeed(1.0);
+        break;
+      case 'sub_seek_next':
+        player.command(['sub-seek', '1']);
+        break;
+      case 'sub_seek_prev':
+        player.command(['sub-seek', '-1']);
+        break;
+      case 'shader_toggle':
+        onToggleShader?.call();
         break;
     }
   }
@@ -322,39 +310,45 @@ class KeyboardShortcutsService {
   String getActionDisplayName(String action) {
     switch (action) {
       case 'play_pause':
-        return 'Play/Pause';
+        return t.hotkeys.actions.playPause;
       case 'volume_up':
-        return 'Volume Up';
+        return t.hotkeys.actions.volumeUp;
       case 'volume_down':
-        return 'Volume Down';
+        return t.hotkeys.actions.volumeDown;
       case 'seek_forward':
-        return 'Seek Forward (${_seekTimeSmall}s)';
+        return t.hotkeys.actions.seekForward(seconds: _seekTimeSmall);
       case 'seek_backward':
-        return 'Seek Backward (${_seekTimeSmall}s)';
+        return t.hotkeys.actions.seekBackward(seconds: _seekTimeSmall);
       case 'seek_forward_large':
-        return 'Seek Forward (${_seekTimeLarge}s)';
+        return t.hotkeys.actions.seekForward(seconds: _seekTimeLarge);
       case 'seek_backward_large':
-        return 'Seek Backward (${_seekTimeLarge}s)';
+        return t.hotkeys.actions.seekBackward(seconds: _seekTimeLarge);
       case 'fullscreen_toggle':
-        return 'Toggle Fullscreen';
+        return t.hotkeys.actions.fullscreenToggle;
       case 'mute_toggle':
-        return 'Toggle Mute';
+        return t.hotkeys.actions.muteToggle;
       case 'subtitle_toggle':
-        return 'Toggle Subtitles';
+        return t.hotkeys.actions.subtitleToggle;
       case 'audio_track_next':
-        return 'Next Audio Track';
+        return t.hotkeys.actions.audioTrackNext;
       case 'subtitle_track_next':
-        return 'Next Subtitle Track';
+        return t.hotkeys.actions.subtitleTrackNext;
       case 'chapter_next':
-        return 'Next Chapter';
+        return t.hotkeys.actions.chapterNext;
       case 'chapter_previous':
-        return 'Previous Chapter';
+        return t.hotkeys.actions.chapterPrevious;
       case 'speed_increase':
-        return 'Increase Speed';
+        return t.hotkeys.actions.speedIncrease;
       case 'speed_decrease':
-        return 'Decrease Speed';
+        return t.hotkeys.actions.speedDecrease;
       case 'speed_reset':
-        return 'Reset Speed';
+        return t.hotkeys.actions.speedReset;
+      case 'sub_seek_next':
+        return t.hotkeys.actions.subSeekNext;
+      case 'sub_seek_prev':
+        return t.hotkeys.actions.subSeekPrev;
+      case 'shader_toggle':
+        return t.hotkeys.actions.shaderToggle;
       default:
         return action;
     }

@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:plezy/widgets/app_icon.dart';
 import 'package:material_symbols_icons/symbols.dart';
@@ -20,16 +22,22 @@ import 'profile/profile_switch_screen.dart';
 import '../providers/user_profile_provider.dart';
 import '../providers/settings_provider.dart';
 import '../mixins/refreshable.dart';
+import '../mixins/tab_visibility_aware.dart';
 import '../i18n/strings.g.dart';
 import '../mixins/item_updatable.dart';
+import '../mixins/watch_state_aware.dart';
+import '../utils/watch_state_notifier.dart';
 import '../utils/app_logger.dart';
+import '../utils/dialogs.dart';
 import '../utils/provider_extensions.dart';
 import '../utils/video_player_navigation.dart';
 import '../utils/layout_constants.dart';
 import '../utils/platform_detector.dart';
 import '../theme/mono_tokens.dart';
+import '../services/watch_next_service.dart';
 import 'auth_screen.dart';
 import 'libraries/state_messages.dart';
+import 'main_screen.dart';
 import '../watch_together/watch_together.dart';
 
 class DiscoverScreen extends StatefulWidget {
@@ -42,8 +50,9 @@ class DiscoverScreen extends StatefulWidget {
 }
 
 class _DiscoverScreenState extends State<DiscoverScreen>
-    with Refreshable, FullRefreshable, ItemUpdatable, SingleTickerProviderStateMixin {
+    with Refreshable, FullRefreshable, ItemUpdatable, WatchStateAware, TabVisibilityAware, WidgetsBindingObserver {
   static const Duration _heroAutoScrollDuration = Duration(seconds: 8);
+  static const Duration _indicatorUpdateInterval = Duration(milliseconds: 200);
 
   @override
   PlexClient get client {
@@ -63,8 +72,51 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   final ScrollController _scrollController = ScrollController();
   int _currentHeroIndex = 0;
   Timer? _autoScrollTimer;
-  late AnimationController _indicatorAnimationController;
+  Timer? _indicatorTimer;
+  final ValueNotifier<double> _indicatorProgress = ValueNotifier(0.0);
   bool _isAutoScrollPaused = false;
+
+  String _toGlobalKey(String ratingKey, String serverId) => '$serverId:$ratingKey';
+
+  // WatchStateAware: watch on-deck items and their parent shows/seasons
+  @override
+  Set<String>? get watchedRatingKeys {
+    final keys = <String>{};
+    for (final item in _onDeck) {
+      keys.add(item.ratingKey);
+      if (item.parentRatingKey != null) {
+        keys.add(item.parentRatingKey!);
+      }
+      if (item.grandparentRatingKey != null) {
+        keys.add(item.grandparentRatingKey!);
+      }
+    }
+    return keys;
+  }
+
+  @override
+  Set<String>? get watchedGlobalKeys {
+    final keys = <String>{};
+    for (final item in _onDeck) {
+      final serverId = item.serverId;
+      if (serverId == null) return null;
+
+      keys.add(_toGlobalKey(item.ratingKey, serverId));
+      if (item.parentRatingKey != null) {
+        keys.add(_toGlobalKey(item.parentRatingKey!, serverId));
+      }
+      if (item.grandparentRatingKey != null) {
+        keys.add(_toGlobalKey(item.grandparentRatingKey!, serverId));
+      }
+    }
+    return keys;
+  }
+
+  @override
+  void onWatchStateChanged(WatchStateEvent event) {
+    // Refresh continue watching when any relevant item changes
+    _refreshContinueWatching();
+  }
 
   // Hub navigation keys
   GlobalKey<HubSectionState>? _continueWatchingHubKey;
@@ -115,17 +167,43 @@ class _DiscoverScreenState extends State<DiscoverScreen>
     return keys;
   }
 
+  bool get _isHeroSectionVisible => _onDeck.isNotEmpty && context.read<SettingsProvider>().showHeroSection;
+
+  void _scrollToTop() {
+    if (!_scrollController.hasClients) return;
+    _scrollController.animateTo(0, duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
+  }
+
+  void _focusTopBoundary() {
+    if (_isHeroSectionVisible) {
+      _heroFocusNode.requestFocus();
+    } else {
+      _refreshButtonFocusNode.requestFocus();
+    }
+    _scrollToTop();
+  }
+
+  void _focusContentFromAppBar() {
+    if (_isHeroSectionVisible) {
+      _heroFocusNode.requestFocus();
+      return;
+    }
+
+    final keys = _allHubKeys;
+    if (keys.isNotEmpty) {
+      keys.first.currentState?.requestFocusFromMemory();
+    }
+  }
+
   /// Handle vertical navigation between hubs
   /// Returns true if the navigation was handled
   bool _handleVerticalNavigation(int hubIndex, bool isUp) {
     final keys = _allHubKeys;
     if (keys.isEmpty) return false;
 
-    // UP from first hub: Navigate to hero section
+    // UP from first hub: navigate to hero when visible, otherwise app bar
     if (isUp && hubIndex == 0) {
-      _heroFocusNode.requestFocus();
-      // Scroll to top to show hero fully
-      _scrollController.animateTo(0, duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
+      _focusTopBoundary();
       return true;
     }
 
@@ -152,10 +230,15 @@ class _DiscoverScreenState extends State<DiscoverScreen>
     return false;
   }
 
+  /// Navigate focus to the sidebar
+  void _navigateToSidebar() {
+    MainScreenFocusScope.of(context)?.focusSidebar();
+  }
+
   @override
   void initState() {
     super.initState();
-    _indicatorAnimationController = AnimationController(vsync: this, duration: _heroAutoScrollDuration);
+    WidgetsBinding.instance.addObserver(this);
     _heroFocusNode = FocusNode(debugLabel: 'hero_section');
     _refreshButtonFocusNode = FocusNode(debugLabel: 'refresh_button');
     _watchTogetherButtonFocusNode = FocusNode(debugLabel: 'watch_together_button');
@@ -214,10 +297,12 @@ class _DiscoverScreenState extends State<DiscoverScreen>
       return KeyEventResult.handled;
     }
 
-    // LEFT: Navigate hero carousel to previous
+    // LEFT: Navigate hero carousel to previous, or focus sidebar at index 0
     if (key.isLeftKey) {
       if (_currentHeroIndex > 0) {
         _heroController.previousPage(duration: tokens(context).slow, curve: Curves.easeInOut);
+      } else {
+        _navigateToSidebar();
       }
       return KeyEventResult.handled;
     }
@@ -249,9 +334,9 @@ class _DiscoverScreenState extends State<DiscoverScreen>
 
     final key = event.logicalKey;
 
-    // DOWN: Return to hero
+    // DOWN: Return to hero/content
     if (key.isDownKey) {
-      _heroFocusNode.requestFocus();
+      _focusContentFromAppBar();
       return KeyEventResult.handled;
     }
 
@@ -261,8 +346,14 @@ class _DiscoverScreenState extends State<DiscoverScreen>
       return KeyEventResult.handled;
     }
 
-    // LEFT/UP: Block at boundary
-    if (key.isLeftKey || key.isUpKey) {
+    // LEFT: Navigate to sidebar
+    if (key.isLeftKey) {
+      _navigateToSidebar();
+      return KeyEventResult.handled;
+    }
+
+    // UP: Block at boundary
+    if (key.isUpKey) {
       return KeyEventResult.handled;
     }
 
@@ -283,9 +374,9 @@ class _DiscoverScreenState extends State<DiscoverScreen>
 
     final key = event.logicalKey;
 
-    // DOWN: Return to hero
+    // DOWN: Return to hero/content
     if (key.isDownKey) {
-      _heroFocusNode.requestFocus();
+      _focusContentFromAppBar();
       return KeyEventResult.handled;
     }
 
@@ -323,9 +414,9 @@ class _DiscoverScreenState extends State<DiscoverScreen>
 
     final key = event.logicalKey;
 
-    // DOWN: Return to hero
+    // DOWN: Return to hero/content
     if (key.isDownKey) {
-      _heroFocusNode.requestFocus();
+      _focusContentFromAppBar();
       return KeyEventResult.handled;
     }
 
@@ -352,10 +443,12 @@ class _DiscoverScreenState extends State<DiscoverScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _autoScrollTimer?.cancel();
+    _indicatorTimer?.cancel();
+    _indicatorProgress.dispose();
     _heroController.dispose();
     _scrollController.dispose();
-    _indicatorAnimationController.dispose();
     _heroFocusNode.dispose();
     _refreshButtonFocusNode.removeListener(_onRefreshFocusChange);
     _refreshButtonFocusNode.dispose();
@@ -366,10 +459,20 @@ class _DiscoverScreenState extends State<DiscoverScreen>
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Refresh continue watching when app resumes on mobile platforms
+    // Skip on desktop to avoid excessive refreshes from window focus changes
+    if (state == AppLifecycleState.resumed && (Platform.isIOS || Platform.isAndroid)) {
+      appLogger.d('App resumed on mobile - refreshing continue watching');
+      _refreshContinueWatching();
+    }
+  }
+
   void _startAutoScroll() {
     if (_isAutoScrollPaused) return;
 
-    _indicatorAnimationController.forward(from: 0.0);
+    _startIndicatorProgress();
     _autoScrollTimer = Timer.periodic(_heroAutoScrollDuration, (timer) {
       if (_onDeck.isEmpty || !_heroController.hasClients || _isAutoScrollPaused) {
         return;
@@ -385,10 +488,28 @@ class _DiscoverScreenState extends State<DiscoverScreen>
       // Wait for page transition to complete before resetting progress
       Future.delayed(const Duration(milliseconds: 500), () {
         if (!_isAutoScrollPaused) {
-          _indicatorAnimationController.forward(from: 0.0);
+          _startIndicatorProgress();
         }
       });
     });
+  }
+
+  void _startIndicatorProgress() {
+    _indicatorTimer?.cancel();
+    _indicatorProgress.value = 0.0;
+    final totalSteps = _heroAutoScrollDuration.inMilliseconds ~/ _indicatorUpdateInterval.inMilliseconds;
+    int step = 0;
+    _indicatorTimer = Timer.periodic(_indicatorUpdateInterval, (timer) {
+      step++;
+      _indicatorProgress.value = (step / totalSteps).clamp(0.0, 1.0);
+      if (step >= totalSteps) {
+        timer.cancel();
+      }
+    });
+  }
+
+  void _stopIndicatorProgress() {
+    _indicatorTimer?.cancel();
   }
 
   void _resetAutoScrollTimer() {
@@ -401,7 +522,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
       _isAutoScrollPaused = true;
     });
     _autoScrollTimer?.cancel();
-    _indicatorAnimationController.stop();
+    _stopIndicatorProgress();
   }
 
   void _resumeAutoScroll() {
@@ -409,6 +530,20 @@ class _DiscoverScreenState extends State<DiscoverScreen>
       _isAutoScrollPaused = false;
     });
     _startAutoScroll();
+  }
+
+  @override
+  void onTabHidden() {
+    _autoScrollTimer?.cancel();
+    _stopIndicatorProgress();
+  }
+
+  @override
+  void onTabShown() {
+    if (!_isAutoScrollPaused) {
+      _startAutoScroll();
+    }
+    _focusTopBoundary();
   }
 
   // Helper method to calculate visible dot range (max 5 dots)
@@ -455,16 +590,29 @@ class _DiscoverScreenState extends State<DiscoverScreen>
     });
 
     try {
-      appLogger.d('Fetching onDeck and hubs from all Plex servers');
+      appLogger.d('Fetching onDeck and global hubs from all Plex servers');
       final multiServerProvider = Provider.of<MultiServerProvider>(context, listen: false);
 
       if (!multiServerProvider.hasConnectedServers) {
         throw Exception('No servers available');
       }
 
-      // Start OnDeck and libraries fetch in parallel
-      final onDeckFuture = multiServerProvider.aggregationService.getOnDeckFromAllServers(limit: 20);
-      final librariesFuture = multiServerProvider.aggregationService.getLibrariesFromAllServersGrouped();
+      // Get hidden libraries for filtering
+      final hiddenLibrariesProvider = Provider.of<HiddenLibrariesProvider>(context, listen: false);
+
+      // Get settings for hub mode preference (ensure initialized before accessing)
+      final settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
+      await settingsProvider.ensureInitialized();
+
+      // Start OnDeck and hubs fetch in parallel
+      final onDeckFuture = multiServerProvider.aggregationService.getOnDeckFromAllServers(
+        limit: 20,
+        hiddenLibraryKeys: hiddenLibrariesProvider.hiddenLibraryKeys,
+      );
+      final hubsFuture = multiServerProvider.aggregationService.getHubsFromAllServers(
+        hiddenLibraryKeys: hiddenLibrariesProvider.hiddenLibraryKeys,
+        useGlobalHubs: settingsProvider.useGlobalHubs,
+      );
 
       // Wait for OnDeck to complete and show it immediately
       final onDeck = await onDeckFuture;
@@ -482,37 +630,37 @@ class _DiscoverScreenState extends State<DiscoverScreen>
         }
       });
 
+      // Focus hero section now that it's visible, but only if no modal route is on top
+      if (onDeck.isNotEmpty && (ModalRoute.of(context)?.isCurrent ?? false)) {
+        _heroFocusNode.requestFocus();
+      }
+
+      // Sync to Android TV Watch Next row
+      if (Platform.isAndroid) {
+        _syncWatchNext(onDeck);
+      }
+
       // Sync PageController to first page after OnDeck loads
       if (_heroController.hasClients && onDeck.isNotEmpty) {
         _heroController.jumpToPage(0);
       }
 
-      // Wait for libraries and then fetch hubs
-      final librariesByServer = await librariesFuture;
+      // Wait for global hubs
+      final allHubs = await hubsFuture;
 
       if (!mounted) return;
 
-      // Get hidden libraries to filter from hubs
-      final hiddenLibrariesProvider = Provider.of<HiddenLibrariesProvider>(context, listen: false);
-
-      // Fetch hubs using the pre-fetched libraries and hidden keys
-      final allHubs = await multiServerProvider.aggregationService.getHubsFromAllServers(
-        librariesByServer: librariesByServer,
-        hiddenLibraryKeys: hiddenLibrariesProvider.hiddenLibraryKeys,
-      );
-
-      // Filter out duplicate hubs that we already fetch separately
+      // Filter out Continue Watching / On Deck hubs (handled separately in hero section)
       final filteredHubs = allHubs.where((hub) {
         final hubId = hub.hubIdentifier?.toLowerCase() ?? '';
         final title = hub.title.toLowerCase();
-        // Skip "Continue Watching" and "On Deck" hubs (we handle these separately)
         return !hubId.contains('ondeck') &&
             !hubId.contains('continue') &&
             !title.contains('continue watching') &&
             !title.contains('on deck');
       }).toList();
 
-      appLogger.d('Received ${onDeck.length} on deck items and ${filteredHubs.length} hubs from all servers');
+      appLogger.d('Received ${onDeck.length} on deck items and ${filteredHubs.length} global hubs from all servers');
       if (!mounted) return;
       setState(() {
         _hubs = filteredHubs;
@@ -543,7 +691,11 @@ class _DiscoverScreenState extends State<DiscoverScreen>
         return;
       }
 
-      final onDeck = await multiServerProvider.aggregationService.getOnDeckFromAllServers(limit: 20);
+      final hiddenLibrariesProvider = context.read<HiddenLibrariesProvider>();
+      final onDeck = await multiServerProvider.aggregationService.getOnDeckFromAllServers(
+        limit: 20,
+        hiddenLibraryKeys: hiddenLibrariesProvider.hiddenLibraryKeys,
+      );
 
       if (mounted) {
         setState(() {
@@ -556,11 +708,26 @@ class _DiscoverScreenState extends State<DiscoverScreen>
             }
           }
         });
+
+        // Sync to Android TV Watch Next row
+        if (Platform.isAndroid) {
+          _syncWatchNext(onDeck);
+        }
+
         appLogger.d('Continue Watching refreshed successfully');
       }
     } catch (e) {
       appLogger.w('Failed to refresh Continue Watching', error: e);
       // Silently fail - don't show error to user for background refresh
+    }
+  }
+
+  /// Sync On Deck items to Android TV Watch Next row
+  Future<void> _syncWatchNext(List<PlexMetadata> onDeck) async {
+    try {
+      await WatchNextService().syncFromOnDeck(onDeck, (serverId) => context.getClientForServer(serverId));
+    } catch (e) {
+      appLogger.w('Failed to sync Watch Next', error: e);
     }
   }
 
@@ -675,6 +842,15 @@ class _DiscoverScreenState extends State<DiscoverScreen>
     return Symbols.auto_awesome_rounded;
   }
 
+  /// Get the set of hub titles that appear more than once (duplicates)
+  Set<String> _getDuplicateHubTitles() {
+    final titleCounts = <String, int>{};
+    for (final hub in _hubs) {
+      titleCounts[hub.title] = (titleCounts[hub.title] ?? 0) + 1;
+    }
+    return titleCounts.entries.where((e) => e.value > 1).map((e) => e.key).toSet();
+  }
+
   @override
   void updateItemInLists(String ratingKey, PlexMetadata updatedMetadata) {
     // Check and update in _onDeck list
@@ -693,22 +869,17 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   }
 
   Future<void> _handleLogout() async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(t.common.logout),
-        content: Text(t.messages.logoutConfirm),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(t.common.cancel)),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(t.common.logout)),
-        ],
-      ),
+    final confirm = await showConfirmDialog(
+      context,
+      title: t.common.logout,
+      message: t.messages.logoutConfirm,
+      confirmText: t.common.logout,
+      isDestructive: true,
     );
 
-    if (confirm == true && mounted) {
+    if (confirm && mounted) {
       // Use comprehensive logout through UserProfileProvider
       final userProfileProvider = Provider.of<UserProfileProvider>(context, listen: false);
-      final plexClientProvider = context.plexClient;
       final multiServerProvider = context.read<MultiServerProvider>();
       final serverStateProvider = context.read<ServerStateProvider>();
       final hiddenLibrariesProvider = context.read<HiddenLibrariesProvider>();
@@ -716,7 +887,6 @@ class _DiscoverScreenState extends State<DiscoverScreen>
 
       // Clear all user data and provider states
       await userProfileProvider.logout();
-      plexClientProvider.clearClient();
       multiServerProvider.clearAllConnections();
       serverStateProvider.reset();
       await hiddenLibrariesProvider.refresh();
@@ -926,6 +1096,10 @@ class _DiscoverScreenState extends State<DiscoverScreen>
 
   @override
   Widget build(BuildContext context) {
+    // Get settings for server name display
+    final showServerNameOnHubs = context.watch<SettingsProvider>().showServerNameOnHubs;
+    final duplicateHubTitles = _getDuplicateHubTitles();
+
     return Scaffold(
       body: Stack(
         children: [
@@ -975,6 +1149,8 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                         onRemoveFromContinueWatching: _refreshContinueWatching,
                         isInContinueWatching: true,
                         onVerticalNavigation: (isUp) => _handleVerticalNavigation(0, isUp),
+                        onNavigateUp: _focusTopBoundary,
+                        onNavigateToSidebar: _navigateToSidebar,
                       ),
                     ),
 
@@ -985,9 +1161,12 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                         key: i < _hubKeys.length ? _hubKeys[i] : null,
                         hub: _hubs[i],
                         icon: _getHubIcon(_hubs[i].title),
+                        showServerName: showServerNameOnHubs || duplicateHubTitles.contains(_hubs[i].title),
                         onRefresh: updateItem,
                         // Hub index is i + 1 if continue watching exists, otherwise i
                         onVerticalNavigation: (isUp) => _handleVerticalNavigation(_onDeck.isNotEmpty ? i + 1 : i, isUp),
+                        onNavigateUp: (i == 0 && _onDeck.isEmpty) ? _focusTopBoundary : null,
+                        onNavigateToSidebar: _navigateToSidebar,
                       ),
                     ),
 
@@ -1068,11 +1247,11 @@ class _DiscoverScreenState extends State<DiscoverScreen>
     return SliverToBoxAdapter(
       child: Focus(
         focusNode: _heroFocusNode,
-        autofocus: true,
         onKeyEvent: _handleHeroKeyEvent,
         child: SizedBox(
           height: heroHeight,
           child: Stack(
+            clipBehavior: Clip.none,
             children: [
               PageView.builder(
                 controller: _heroController,
@@ -1089,6 +1268,30 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                 itemBuilder: (context, index) {
                   return _buildHeroItem(_onDeck[index]);
                 },
+              ),
+              // Bottom gradient that extends past hero bounds to ensure seamless blend
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: -32, // Extend 32px past the hero section bounds
+                height: 80, // Tall enough to cover any gap
+                child: IgnorePointer(
+                  child: Builder(
+                    builder: (context) {
+                      final bgColor = Theme.of(context).scaffoldBackgroundColor;
+                      return Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [bgColor.withValues(alpha: 0), bgColor],
+                            stops: const [0.0, 0.6],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
               ),
               // Page indicators with animated progress and pause/play button
               Positioned(
@@ -1126,17 +1329,14 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                         final dotSize = _getDotSize(index, range.start, range.end);
 
                         if (isActive) {
-                          // Animated progress indicator for active page
-                          return AnimatedBuilder(
-                            animation: _indicatorAnimationController,
-                            builder: (context, child) {
-                              // Fill width animates based on dot size
+                          // Progress indicator for active page (~5fps via Timer)
+                          return ValueListenableBuilder<double>(
+                            valueListenable: _indicatorProgress,
+                            builder: (context, progress, child) {
                               final maxWidth = dotSize * 3; // 24px for normal, 15px for small
-                              final fillWidth = dotSize + ((maxWidth - dotSize) * _indicatorAnimationController.value);
+                              final fillWidth = dotSize + ((maxWidth - dotSize) * progress);
                               final onSurface = Theme.of(context).colorScheme.onSurface;
-                              return AnimatedContainer(
-                                duration: tokens(context).slow,
-                                curve: Curves.easeInOut,
+                              return Container(
                                 margin: const EdgeInsets.symmetric(horizontal: 4),
                                 width: maxWidth,
                                 height: dotSize,
@@ -1207,47 +1407,51 @@ class _DiscoverScreenState extends State<DiscoverScreen>
         },
         child: Stack(
           fit: StackFit.expand,
+          clipBehavior: Clip.none,
           children: [
             // Background Image with fade/zoom animation and parallax
             if (heroItem.art != null || heroItem.grandparentArt != null)
-              AnimatedBuilder(
-                animation: _scrollController,
-                builder: (context, child) {
-                  final scrollOffset = _scrollController.hasClients ? _scrollController.offset : 0.0;
-                  return Transform.translate(offset: Offset(0, scrollOffset * 0.3), child: child);
-                },
-                child: TweenAnimationBuilder<double>(
-                  tween: Tween(begin: 0.0, end: 1.0),
-                  duration: const Duration(milliseconds: 800),
-                  curve: Curves.easeOut,
-                  builder: (context, value, child) {
-                    return Transform.scale(
-                      scale: 1.0 + (0.1 * (1 - value)),
-                      child: Opacity(opacity: value, child: child),
-                    );
+              ClipRect(
+                child: AnimatedBuilder(
+                  animation: _scrollController,
+                  builder: (context, child) {
+                    final scrollOffset = _scrollController.hasClients ? _scrollController.offset : 0.0;
+                    return Transform.translate(offset: Offset(0, scrollOffset * 0.3), child: child);
                   },
-                  child: Builder(
-                    builder: (context) {
-                      final client = _getClientForItem(heroItem);
-                      final mediaQuery = MediaQuery.of(context);
-                      final imageUrl = PlexImageHelper.getOptimizedImageUrl(
-                        client: client,
-                        thumbPath: heroItem.art ?? heroItem.grandparentArt,
-                        maxWidth: mediaQuery.size.width,
-                        maxHeight: mediaQuery.size.height * 0.7,
-                        devicePixelRatio: mediaQuery.devicePixelRatio,
-                        imageType: ImageType.art,
-                      );
-
-                      return CachedNetworkImage(
-                        imageUrl: imageUrl,
-                        fit: BoxFit.cover,
-                        placeholder: (context, url) =>
-                            Container(color: Theme.of(context).colorScheme.surfaceContainerHighest),
-                        errorWidget: (context, url, error) =>
-                            Container(color: Theme.of(context).colorScheme.surfaceContainerHighest),
+                  child: TweenAnimationBuilder<double>(
+                    tween: Tween(begin: 0.0, end: 1.0),
+                    duration: const Duration(milliseconds: 800),
+                    curve: Curves.easeOut,
+                    builder: (context, value, child) {
+                      return Transform.scale(
+                        scale: 1.0 + (0.1 * (1 - value)),
+                        child: Opacity(opacity: value, child: child),
                       );
                     },
+                    child: Builder(
+                      builder: (context) {
+                        final client = _getClientForItem(heroItem);
+                        final mediaQuery = MediaQuery.of(context);
+                        final dpr = PlexImageHelper.effectiveDevicePixelRatio(context);
+                        final imageUrl = PlexImageHelper.getOptimizedImageUrl(
+                          client: client,
+                          thumbPath: heroItem.art ?? heroItem.grandparentArt,
+                          maxWidth: mediaQuery.size.width,
+                          maxHeight: mediaQuery.size.height * 0.7,
+                          devicePixelRatio: dpr,
+                          imageType: ImageType.art,
+                        );
+
+                        return CachedNetworkImage(
+                          imageUrl: imageUrl,
+                          fit: BoxFit.cover,
+                          placeholder: (context, url) =>
+                              Container(color: Theme.of(context).colorScheme.surfaceContainerHighest),
+                          errorWidget: (context, url, error) =>
+                              Container(color: Theme.of(context).colorScheme.surfaceContainerHighest),
+                        );
+                      },
+                    ),
                   ),
                 ),
               )
@@ -1255,20 +1459,26 @@ class _DiscoverScreenState extends State<DiscoverScreen>
               Container(color: Theme.of(context).colorScheme.surfaceContainerHighest),
 
             // Gradient Overlay - blends into scaffold background
-            Builder(
-              builder: (context) {
-                final bgColor = Theme.of(context).scaffoldBackgroundColor;
-                return Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [Colors.transparent, bgColor.withValues(alpha: 0.9), bgColor],
-                      stops: const [0.5, 0.85, 1.0],
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: -4, // Extend past stack bounds to ensure coverage
+              child: Builder(
+                builder: (context) {
+                  final bgColor = Theme.of(context).scaffoldBackgroundColor;
+                  return Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.transparent, bgColor.withValues(alpha: 0.9), bgColor],
+                        stops: const [0.5, 0.85, 1.0],
+                      ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
 
             // Content with responsive alignment
@@ -1290,7 +1500,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                         child: Builder(
                           builder: (context) {
                             final client = _getClientForItem(heroItem);
-                            final dpr = MediaQuery.of(context).devicePixelRatio;
+                            final dpr = PlexImageHelper.effectiveDevicePixelRatio(context);
                             final logoUrl = PlexImageHelper.getOptimizedImageUrl(
                               client: client,
                               thumbPath: heroItem.clearLogo,

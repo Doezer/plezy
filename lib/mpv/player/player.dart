@@ -1,11 +1,14 @@
 import 'dart:io' show Platform;
 
 import '../models.dart';
+import 'player_android.dart';
 import 'player_native.dart';
 import 'player_state.dart';
 import 'player_streams.dart';
 import 'platform/player_linux.dart';
 import 'platform/player_windows.dart';
+
+export 'player_base.dart';
 
 /// Abstract interface for the video player.
 ///
@@ -46,6 +49,9 @@ abstract class Player {
   /// This is set by the platform implementation when video
   /// rendering is initialized. Returns null if not ready.
   int? get textureId;
+
+  /// The type of player backend being used (e.g., 'mpv', 'exoplayer').
+  String get playerType;
 
   // ============================================
   // Playback Control
@@ -163,19 +169,55 @@ abstract class Player {
   /// Returns true if the operation was successful.
   Future<bool> setVisible(bool visible);
 
-  /// Notify the player about controls visibility.
-  ///
-  /// On Linux, due to Flutter's lack of transparency support in GtkOverlay,
-  /// the video layer is hidden when controls are visible and shown when
-  /// controls are hidden. On other platforms, this is a no-op.
-  Future<void> setControlsVisible(bool visible);
-
   /// Update the video frame/surface dimensions.
   ///
   /// On iOS/macOS, this updates the Metal layer's frame to match the current
   /// window size. Call this when the layout changes (e.g., device rotation).
   /// On other platforms, this is a no-op.
   Future<void> updateFrame();
+
+  // ============================================
+  // Frame Rate Matching (Android)
+  // ============================================
+
+  /// Set the video frame rate for display refresh rate matching.
+  ///
+  /// On Android, this hints the system to adjust the display refresh rate
+  /// to match the video content's frame rate, reducing judder and saving
+  /// battery on LTPO displays.
+  ///
+  /// [fps] - The video frame rate (e.g., 23.976, 24, 30, 60).
+  /// [durationMs] - The video duration in milliseconds.
+  ///
+  /// On other platforms, this is a no-op.
+  Future<void> setVideoFrameRate(double fps, int durationMs);
+
+  /// Clear the video frame rate hint and restore default display mode.
+  ///
+  /// Call this when playback ends to restore the normal display refresh rate.
+  /// On other platforms, this is a no-op.
+  Future<void> clearVideoFrameRate();
+
+  // ============================================
+  // Audio Focus (Android)
+  // ============================================
+
+  /// Request audio focus before starting playback.
+  ///
+  /// On Android, this notifies the system that the app wants to play audio,
+  /// causing other media apps (Spotify, podcasts, etc.) to pause.
+  ///
+  /// Returns true if audio focus was granted.
+  /// On other platforms, this is a no-op and returns true.
+  Future<bool> requestAudioFocus();
+
+  /// Abandon audio focus when playback stops.
+  ///
+  /// On Android, this notifies the system that the app is done playing audio,
+  /// allowing other apps to resume their playback.
+  ///
+  /// On other platforms, this is a no-op.
+  Future<void> abandonAudioFocus();
 
   // ============================================
   // Lifecycle
@@ -193,11 +235,25 @@ abstract class Player {
   /// Creates a new player instance.
   ///
   /// Returns a platform-specific implementation:
-  /// - macOS/iOS/Android: [PlayerNative] using MPVKit/libmpv with texture rendering
+  /// - macOS/iOS: [PlayerNative] using MPVKit/libmpv with Metal rendering
+  /// - Android: [PlayerAndroid] using ExoPlayer (default) or [PlayerNative] using MPV (fallback)
   /// - Windows: [PlayerWindows] using libmpv with native window embedding
   /// - Linux: [PlayerLinux] using libmpv with OpenGL rendering via GtkGLArea
-  factory Player() {
-    if (Platform.isMacOS || Platform.isIOS || Platform.isAndroid) {
+  ///
+  /// On Android, pass [useExoPlayer] to override the default:
+  /// - true: Use ExoPlayer (default, better hardware support)
+  /// - false: Use MPV (more features, ASS subtitle rendering)
+  factory Player({bool? useExoPlayer}) {
+    if (Platform.isAndroid) {
+      // Default to ExoPlayer on Android, with MPV as fallback
+      // The caller should pass useExoPlayer based on SettingsService.getUseExoPlayer()
+      final useExo = useExoPlayer ?? true;
+      if (useExo) {
+        return PlayerAndroid(); // ExoPlayer (default)
+      }
+      return PlayerNative(); // MPV fallback
+    }
+    if (Platform.isMacOS || Platform.isIOS) {
       return PlayerNative();
     }
     if (Platform.isWindows) {

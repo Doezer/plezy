@@ -6,9 +6,7 @@ import '../models/plex_user_profile.dart';
 import '../services/plex_auth_service.dart';
 import '../services/storage_service.dart';
 import '../utils/app_logger.dart';
-import '../utils/provider_extensions.dart';
 import '../screens/profile/pin_entry_dialog.dart';
-import 'plex_client_provider.dart';
 
 class UserProfileProvider extends ChangeNotifier {
   PlexHome? _home;
@@ -28,6 +26,8 @@ class UserProfileProvider extends ChangeNotifier {
     appLogger.d('hasMultipleUsers: _home=${_home != null}, users count=${_home?.users.length ?? 0}, result=$result');
     return result;
   }
+
+  bool get needsInitialProfileSelection => _home != null && _home!.users.isNotEmpty && _currentUser == null;
 
   PlexAuthService? _authService;
   StorageService? _storageService;
@@ -51,10 +51,14 @@ class UserProfileProvider extends ChangeNotifier {
   }
 
   Future<void> initialize() async {
-    // Prevent duplicate initialization
-    if (_isInitialized) {
+    // Prevent duplicate initialization once we have usable data.
+    // If initialized state exists but home data is missing, retry bootstrap.
+    if (_isInitialized && _home != null) {
       appLogger.d('UserProfileProvider: Already initialized, skipping');
       return;
+    }
+    if (_isInitialized && _home == null) {
+      appLogger.w('UserProfileProvider: Initialized but home data missing, retrying initialization');
     }
 
     appLogger.d('UserProfileProvider: Initializing...');
@@ -198,11 +202,14 @@ class UserProfileProvider extends ChangeNotifier {
           _currentUser = home.getUserByUUID(currentUserUUID);
           appLogger.d('loadHomeUsers: Set current user from UUID: ${_currentUser?.displayName}');
         } else {
-          // Default to admin user if no current user set
-          _currentUser = home.adminUser;
-          if (_currentUser != null) {
+          // Avoid auto-selecting protected profiles on first login.
+          // If there's exactly one unprotected profile, select it automatically.
+          if (home.users.length == 1 && !home.users.first.requiresPassword) {
+            _currentUser = home.users.first;
             await _storageService!.saveCurrentUserUUID(_currentUser!.uuid);
-            appLogger.d('loadHomeUsers: Set current user to admin: ${_currentUser?.displayName}');
+            appLogger.d('loadHomeUsers: Auto-selected only unprotected user: ${_currentUser?.displayName}');
+          } else {
+            appLogger.d('loadHomeUsers: No current user selected yet, waiting for explicit profile selection');
           }
         }
       }
@@ -227,28 +234,13 @@ class UserProfileProvider extends ChangeNotifier {
       return true;
     }
 
-    // Extract client provider before async operations
-    PlexClientProvider? clientProvider;
-    if (context != null) {
-      try {
-        clientProvider = context.plexClient;
-      } catch (e) {
-        appLogger.w('Failed to get PlexClientProvider', error: e);
-      }
-    }
-
     _setLoading(true);
     _clearError();
 
-    return await _attemptUserSwitch(user, context, clientProvider, null);
+    return await _attemptUserSwitch(user, context, null);
   }
 
-  Future<bool> _attemptUserSwitch(
-    PlexHomeUser user,
-    BuildContext? context,
-    PlexClientProvider? clientProvider,
-    String? errorMessage,
-  ) async {
+  Future<bool> _attemptUserSwitch(PlexHomeUser user, BuildContext? context, String? errorMessage) async {
     try {
       final currentToken = _storageService!.getPlexToken();
       if (currentToken == null) {
@@ -324,12 +316,7 @@ class UserProfileProvider extends ChangeNotifier {
 
             // Retry with error message if context is still available
             if (context != null && context.mounted) {
-              return await _attemptUserSwitch(
-                user,
-                context,
-                clientProvider,
-                errorMessage ?? 'Incorrect PIN. Please try again.',
-              );
+              return await _attemptUserSwitch(user, context, errorMessage ?? 'Incorrect PIN. Please try again.');
             }
 
             // If context not available, return false without showing error
@@ -368,11 +355,15 @@ class UserProfileProvider extends ChangeNotifier {
     try {
       await _storageService!.clearUserData();
 
-      // Clear user-specific provider state but keep services for future sign-ins
+      // Clear user-specific provider state and reset initialization so
+      // the next sign-in performs a full bootstrap.
       _home = null;
       _currentUser = null;
       _profileSettings = null;
       _onDataInvalidationRequested = null;
+      _authService = null;
+      _storageService = null;
+      _isInitialized = false;
 
       _clearError();
       notifyListeners();

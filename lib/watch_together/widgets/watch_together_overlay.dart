@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:provider/provider.dart';
 
 import '../../i18n/strings.g.dart';
+import '../../utils/dialogs.dart';
+import '../../utils/snackbar_helper.dart';
 import '../models/watch_session.dart';
 import '../providers/watch_together_provider.dart';
 
@@ -168,6 +171,40 @@ class _SessionMenuSheet extends StatelessWidget {
               ],
             ),
 
+            // Session code with copy button
+            if (provider.sessionId != null) ...[
+              const SizedBox(height: 12),
+              InkWell(
+                onTap: () => _copySessionCode(context, provider.sessionId!),
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '${t.watchTogether.sessionCode}: ',
+                        style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                      ),
+                      Text(
+                        provider.sessionId!,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Icon(Symbols.content_copy_rounded, size: 16, color: theme.colorScheme.onSurfaceVariant),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+
             const SizedBox(height: 16),
             const Divider(),
             const SizedBox(height: 8),
@@ -218,27 +255,24 @@ class _SessionMenuSheet extends StatelessWidget {
     );
   }
 
-  void _confirmLeave(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(provider.isHost ? t.watchTogether.endSessionQuestion : t.watchTogether.leaveSessionQuestion),
-        content: Text(
-          provider.isHost ? t.watchTogether.endSessionConfirmOverlay : t.watchTogether.leaveSessionConfirmOverlay,
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: Text(t.common.cancel)),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(context);
-              provider.leaveSession();
-              onLeaveSession?.call();
-            },
-            child: Text(provider.isHost ? t.watchTogether.endSession : t.watchTogether.leave),
-          ),
-        ],
-      ),
+  void _copySessionCode(BuildContext context, String sessionId) {
+    Clipboard.setData(ClipboardData(text: sessionId));
+    showSuccessSnackBar(context, t.watchTogether.sessionCodeCopied);
+  }
+
+  void _confirmLeave(BuildContext context) async {
+    final confirmed = await showConfirmDialog(
+      context,
+      title: provider.isHost ? t.watchTogether.endSessionQuestion : t.watchTogether.leaveSessionQuestion,
+      message: provider.isHost ? t.watchTogether.endSessionConfirmOverlay : t.watchTogether.leaveSessionConfirmOverlay,
+      confirmText: provider.isHost ? t.watchTogether.endSession : t.watchTogether.leave,
+      isDestructive: true,
     );
+
+    if (confirmed) {
+      provider.leaveSession();
+      onLeaveSession?.call();
+    }
   }
 }
 

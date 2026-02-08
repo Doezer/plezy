@@ -30,6 +30,7 @@ class MediaCard extends StatefulWidget {
   final bool isInContinueWatching;
   final String? collectionId; // The collection ID if displaying within a collection
   final bool isOffline; // True for downloaded content without server access
+  final bool mixedHubContext; // True when in a hub with mixed content (movies + episodes)
 
   const MediaCard({
     super.key,
@@ -43,6 +44,7 @@ class MediaCard extends StatefulWidget {
     this.isInContinueWatching = false,
     this.collectionId,
     this.isOffline = false,
+    this.mixedHubContext = false,
   });
 
   @override
@@ -119,6 +121,7 @@ class MediaCardState extends State<MediaCard> {
       widget.item,
       onRefresh: widget.onRefresh,
       isOffline: widget.isOffline,
+      playDirectly: widget.isInContinueWatching,
     );
 
     if (!context.mounted) return;
@@ -168,6 +171,7 @@ class MediaCardState extends State<MediaCard> {
             onLongPress: _showContextMenu,
             isOffline: widget.isOffline,
             localPosterPath: localPosterPath,
+            mixedHubContext: widget.mixedHubContext,
           )
         : _MediaCardList(
             item: widget.item,
@@ -204,6 +208,7 @@ class _MediaCardGrid extends StatelessWidget {
   final VoidCallback onLongPress;
   final bool isOffline;
   final String? localPosterPath;
+  final bool mixedHubContext;
 
   const _MediaCardGrid({
     required this.item,
@@ -214,6 +219,7 @@ class _MediaCardGrid extends StatelessWidget {
     required this.onLongPress,
     this.isOffline = false,
     this.localPosterPath,
+    this.mixedHubContext = false,
   });
 
   @override
@@ -268,7 +274,13 @@ class _MediaCardGrid extends StatelessWidget {
       children: [
         ClipRRect(
           borderRadius: BorderRadius.circular(tokens(context).radiusSm),
-          child: _buildPosterImage(context, item, isOffline: isOffline, localPosterPath: localPosterPath),
+          child: _buildPosterImage(
+            context,
+            item,
+            isOffline: isOffline,
+            localPosterPath: localPosterPath,
+            mixedHubContext: mixedHubContext,
+          ),
         ),
         _PosterOverlay(item: item),
       ],
@@ -296,7 +308,7 @@ class _MediaCardList extends StatelessWidget {
     this.localPosterPath,
   });
 
-  double get _posterWidth {
+  double _basePosterWidth() {
     switch (density) {
       case LibraryDensity.compact:
         return 80;
@@ -307,8 +319,29 @@ class _MediaCardList extends StatelessWidget {
     }
   }
 
-  double get _posterHeight {
-    return _posterWidth * 1.5; // Maintain 2:3 aspect ratio
+  double _posterWidth(BuildContext context) {
+    final base = _basePosterWidth();
+    // For episodes with thumbnail mode, use wider width to maintain reasonable thumbnail size
+    if (item is PlexMetadata) {
+      final mode = context.watch<SettingsProvider>().episodePosterMode;
+      if ((item as PlexMetadata).usesWideAspectRatio(mode)) {
+        return base * 1.6; // Wider for 16:9 thumbnails
+      }
+    }
+    return base;
+  }
+
+  double _posterHeight(BuildContext context) {
+    final base = _basePosterWidth();
+    // For episodes with thumbnail mode, use 16:9 aspect ratio
+    if (item is PlexMetadata) {
+      final mode = context.watch<SettingsProvider>().episodePosterMode;
+      if ((item as PlexMetadata).usesWideAspectRatio(mode)) {
+        // 16:9: height = width * 9/16 = base * 1.6 * 9/16 = base * 0.9
+        return base * 0.9;
+      }
+    }
+    return base * 1.5; // Default 2:3 aspect ratio
   }
 
   double get _titleFontSize {
@@ -466,8 +499,8 @@ class _MediaCardList extends StatelessWidget {
             children: [
               // Poster (responsive size based on density)
               SizedBox(
-                width: _posterWidth,
-                height: _posterHeight,
+                width: _posterWidth(context),
+                height: _posterHeight(context),
                 child: Stack(
                   children: [
                     ClipRRect(
@@ -544,7 +577,13 @@ class _MediaCardList extends StatelessWidget {
   }
 }
 
-Widget _buildPosterImage(BuildContext context, dynamic item, {bool isOffline = false, String? localPosterPath}) {
+Widget _buildPosterImage(
+  BuildContext context,
+  dynamic item, {
+  bool isOffline = false,
+  String? localPosterPath,
+  bool mixedHubContext = false,
+}) {
   String? posterUrl;
   IconData fallbackIcon = Symbols.movie_rounded;
 
@@ -561,8 +600,20 @@ Widget _buildPosterImage(BuildContext context, dynamic item, {bool isOffline = f
       localFilePath: localPosterPath,
     );
   } else if (item is PlexMetadata) {
-    final useSeasonPoster = context.watch<SettingsProvider>().useSeasonPoster;
-    posterUrl = item.posterThumb(useSeasonPoster: useSeasonPoster);
+    final episodePosterMode = context.watch<SettingsProvider>().episodePosterMode;
+    posterUrl = item.posterThumb(mode: episodePosterMode, mixedHubContext: mixedHubContext);
+
+    // Use thumb image type for 16:9 content (episodes, or movies in mixed hubs)
+    if (item.usesWideAspectRatio(episodePosterMode, mixedHubContext: mixedHubContext)) {
+      return PlexOptimizedImage.thumb(
+        client: isOffline ? null : context.getClientWithFallback(item.serverId),
+        imagePath: posterUrl,
+        width: double.infinity,
+        height: double.infinity,
+        fit: BoxFit.cover,
+        localFilePath: localPosterPath,
+      );
+    }
 
     return PlexOptimizedImage.poster(
       client: isOffline ? null : context.getClientWithFallback(item.serverId),
@@ -663,6 +714,8 @@ class _MediaCardHelpers {
 
   /// Builds watch progress overlay (checkmark for watched, progress bar for in-progress)
   static Widget buildWatchProgress(BuildContext context, PlexMetadata metadata) {
+    final showUnwatchedCount = context.watch<SettingsProvider>().showUnwatchedCount;
+
     return Stack(
       children: [
         // Watched indicator (checkmark)
@@ -678,6 +731,28 @@ class _MediaCardHelpers {
                 boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 4)],
               ),
               child: AppIcon(Symbols.check_rounded, fill: 1, color: tokens(context).bg, size: 16),
+            ),
+          ),
+        if (showUnwatchedCount &&
+            !metadata.isWatched &&
+            (metadata.mediaType == PlexMediaType.show || metadata.mediaType == PlexMediaType.season) &&
+            (metadata.leafCount != null && metadata.leafCount! > 0 && metadata.viewedLeafCount != null))
+          Positioned(
+            top: 4,
+            right: 4,
+            child: Container(
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                color: tokens(context).text,
+                shape: BoxShape.circle,
+                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 4)],
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                '${metadata.leafCount! - metadata.viewedLeafCount!}',
+                style: TextStyle(color: tokens(context).bg, fontSize: 12, fontWeight: FontWeight.bold),
+              ),
             ),
           ),
         // Progress bar for partially watched content (episodes/movies)

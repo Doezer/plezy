@@ -5,6 +5,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'plex_client.dart';
 import '../models/plex_config.dart';
 import '../utils/app_logger.dart';
+import '../utils/connection_constants.dart';
 import 'plex_auth_service.dart';
 import 'storage_service.dart';
 
@@ -71,22 +72,19 @@ class MultiServerManager {
   Future<PlexClient> _createClientForServer({required PlexServer server, required String clientIdentifier}) async {
     final serverId = server.clientIdentifier;
 
-    // Find best working connection
-    PlexConnection? workingConnection;
-    await for (final connection in server.findBestWorkingConnection()) {
-      workingConnection = connection;
-      break;
-    }
-
-    if (workingConnection == null) {
-      throw Exception('No working connection found');
-    }
-
-    final baseUrl = workingConnection.uri;
-
     // Get storage and load cached endpoint for this server
     final storage = await StorageService.getInstance();
     final cachedEndpoint = storage.getServerEndpoint(serverId);
+
+    // Find best working connection, passing cached endpoint for fast-path
+    final streamIterator = StreamIterator(server.findBestWorkingConnection(preferredUri: cachedEndpoint));
+
+    if (!await streamIterator.moveNext()) {
+      throw Exception('No working connection found');
+    }
+
+    final workingConnection = streamIterator.current;
+    final baseUrl = workingConnection.uri;
 
     // Create PlexClient with failover support
     final prioritizedEndpoints = server.prioritizedEndpointUrls(preferredFirst: cachedEndpoint ?? baseUrl);
@@ -110,7 +108,48 @@ class MultiServerManager {
     // Save the initial endpoint
     await storage.saveServerEndpoint(serverId, baseUrl);
 
+    // Drain remaining stream values in background to apply better connections
+    _drainOptimizationStream(streamIterator, client: client, server: server, storage: storage);
+
     return client;
+  }
+
+  /// Continues draining the connection optimization stream in the background,
+  /// switching the client to any better endpoint found.
+  void _drainOptimizationStream(
+    StreamIterator<PlexConnection> streamIterator, {
+    required PlexClient client,
+    required PlexServer server,
+    required StorageService storage,
+  }) {
+    final serverId = server.clientIdentifier;
+
+    () async {
+      try {
+        while (await streamIterator.moveNext()) {
+          final connection = streamIterator.current;
+          final newUrl = connection.uri;
+
+          if (newUrl == client.config.baseUrl) {
+            appLogger.d('Background optimization confirmed current endpoint for ${server.name}');
+            continue;
+          }
+
+          appLogger.i(
+            'Background optimization found better endpoint for ${server.name}',
+            error: {'from': client.config.baseUrl, 'to': newUrl, 'type': connection.displayType},
+          );
+
+          await storage.saveServerEndpoint(serverId, newUrl);
+          final newEndpoints = server.prioritizedEndpointUrls(preferredFirst: newUrl);
+          await client.updateEndpointPreferences(newEndpoints, switchToFirst: true);
+        }
+      } catch (e, stackTrace) {
+        appLogger.w('Background connection optimization failed for ${server.name}', error: e, stackTrace: stackTrace);
+      } finally {
+        await streamIterator.cancel();
+      }
+    }();
   }
 
   /// Connect to all available servers in parallel
@@ -118,7 +157,7 @@ class MultiServerManager {
   Future<int> connectToAllServers(
     List<PlexServer> servers, {
     String? clientIdentifier,
-    Duration timeout = const Duration(seconds: 10),
+    Duration timeout = ConnectionTimeouts.connectAll,
     Function(String serverId, PlexClient client)? onServerConnected,
     Function(String serverId, Object error)? onServerFailed,
   }) async {
@@ -333,11 +372,12 @@ class MultiServerManager {
   Future<void> _reoptimizeServer({required String serverId, required PlexServer server, required String reason}) async {
     final storage = await StorageService.getInstance();
     final client = _clients[serverId];
+    final cachedEndpoint = storage.getServerEndpoint(serverId);
 
     try {
       appLogger.d('Starting connection optimization for ${server.name}', error: {'reason': reason});
 
-      await for (final connection in server.findBestWorkingConnection()) {
+      await for (final connection in server.findBestWorkingConnection(preferredUri: cachedEndpoint)) {
         final newUrl = connection.uri;
 
         // Check if this is actually a better connection than current
@@ -349,9 +389,14 @@ class MultiServerManager {
         // Save the new endpoint
         await storage.saveServerEndpoint(serverId, newUrl);
 
-        // If client has endpoint failover, it will automatically switch
-        // Otherwise, we might need to recreate the client (but failover should handle it)
-        appLogger.i('Updated optimal endpoint for ${server.name}: $newUrl', error: {'type': connection.displayType});
+        // Actively switch the running client to the better endpoint
+        if (client != null) {
+          final newEndpoints = server.prioritizedEndpointUrls(preferredFirst: newUrl);
+          await client.updateEndpointPreferences(newEndpoints, switchToFirst: true);
+          appLogger.i('Switched ${server.name} to better endpoint: $newUrl', error: {'type': connection.displayType});
+        } else {
+          appLogger.i('Updated optimal endpoint for ${server.name}: $newUrl', error: {'type': connection.displayType});
+        }
       }
     } catch (e, stackTrace) {
       appLogger.w('Connection optimization failed for ${server.name}', error: e, stackTrace: stackTrace);

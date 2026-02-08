@@ -2,9 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:plezy/theme/app_icon_theme.dart';
 import 'mono_tokens.dart';
 
-ThemeData monoTheme({required bool dark}) {
+ThemeData monoTheme({required bool dark, bool oled = false}) {
   // neutral greys tuned for crisp contrast
-  final c = dark
+  final c = oled
+      ? (
+          bg: const Color(0xFF000000), // Pure black for OLED
+          surface: const Color(0xFF0A0A0A), // Very dark gray
+          outline: const Color(0x1FFFFFFF),
+          text: const Color(0xFFEDEDED),
+          textMuted: const Color(0x99EDEDED),
+        )
+      : dark
       ? (
           bg: const Color(0xFF0E0F12),
           surface: const Color(0xFF15171C),
@@ -20,21 +28,23 @@ ThemeData monoTheme({required bool dark}) {
           textMuted: const Color(0x99111111),
         );
 
+  final isDark = dark || oled;
+
   final buttonStyle = ButtonStyle(
     padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 18, vertical: 14)),
     elevation: const WidgetStatePropertyAll(0),
     backgroundColor: WidgetStatePropertyAll(c.text),
-    foregroundColor: WidgetStatePropertyAll(dark ? c.bg : Colors.white),
+    foregroundColor: WidgetStatePropertyAll(isDark ? c.bg : Colors.white),
     shape: const WidgetStatePropertyAll(StadiumBorder()),
   );
 
   final base = ThemeData(
     useMaterial3: true,
-    brightness: dark ? Brightness.dark : Brightness.light,
+    brightness: isDark ? Brightness.dark : Brightness.light,
     colorScheme: ColorScheme(
-      brightness: dark ? Brightness.dark : Brightness.light,
+      brightness: isDark ? Brightness.dark : Brightness.light,
       primary: c.text,
-      onPrimary: dark ? const Color(0xFF0E0F12) : Colors.white,
+      onPrimary: isDark ? c.bg : Colors.white,
       secondary: c.text,
       onSecondary: c.bg,
       surface: c.surface,

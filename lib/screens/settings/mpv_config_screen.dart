@@ -3,6 +3,8 @@ import 'package:plezy/widgets/app_icon.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import '../../i18n/strings.g.dart';
 import '../../models/mpv_config_models.dart';
+import '../../utils/dialogs.dart';
+import '../../utils/snackbar_helper.dart';
 import '../../services/settings_service.dart';
 import '../../widgets/desktop_app_bar.dart';
 
@@ -74,6 +76,9 @@ class _MpvConfigScreenState extends State<MpvConfigScreen> {
 
     final keyController = TextEditingController(text: existingEntry?.key ?? '');
     final valueController = TextEditingController(text: existingEntry?.value ?? '');
+    final keyFocusNode = FocusNode();
+    final valueFocusNode = FocusNode();
+    final saveFocusNode = FocusNode();
 
     final result = await showDialog<bool>(
       context: context,
@@ -84,22 +89,29 @@ class _MpvConfigScreenState extends State<MpvConfigScreen> {
           children: [
             TextField(
               controller: keyController,
+              focusNode: keyFocusNode,
               decoration: InputDecoration(labelText: t.mpvConfig.propertyKey, hintText: t.mpvConfig.propertyKeyHint),
               autofocus: true,
+              textInputAction: TextInputAction.next,
+              onSubmitted: (_) => valueFocusNode.requestFocus(),
             ),
             const SizedBox(height: 16),
             TextField(
               controller: valueController,
+              focusNode: valueFocusNode,
               decoration: InputDecoration(
                 labelText: t.mpvConfig.propertyValue,
                 hintText: t.mpvConfig.propertyValueHint,
               ),
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => saveFocusNode.requestFocus(),
             ),
           ],
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: Text(t.common.cancel)),
           TextButton(
+            focusNode: saveFocusNode,
             onPressed: () {
               if (keyController.text.isNotEmpty && valueController.text.isNotEmpty) {
                 Navigator.pop(context, true);
@@ -127,21 +139,13 @@ class _MpvConfigScreenState extends State<MpvConfigScreen> {
 
     keyController.dispose();
     valueController.dispose();
+    keyFocusNode.dispose();
+    valueFocusNode.dispose();
+    saveFocusNode.dispose();
   }
 
-  Future<bool> _showConfirmDeleteDialog({required String title, required String content}) async {
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: Text(content),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(t.common.cancel)),
-          TextButton(onPressed: () => Navigator.pop(context, true), child: Text(t.common.delete)),
-        ],
-      ),
-    );
-    return result == true;
+  Future<bool> _showConfirmDeleteDialog({required String title, required String content}) {
+    return showDeleteConfirmation(context, title: title, message: content);
   }
 
   Future<void> _showDeleteEntryDialog(int index) async {
@@ -189,7 +193,7 @@ class _MpvConfigScreenState extends State<MpvConfigScreen> {
       });
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t.mpvConfig.presetSaved)));
+        showSuccessSnackBar(context, t.mpvConfig.presetSaved);
       }
     }
 
@@ -203,7 +207,7 @@ class _MpvConfigScreenState extends State<MpvConfigScreen> {
     });
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t.mpvConfig.presetLoaded)));
+      showAppSnackBar(context, t.mpvConfig.presetLoaded);
     }
   }
 
@@ -220,7 +224,7 @@ class _MpvConfigScreenState extends State<MpvConfigScreen> {
       });
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t.mpvConfig.presetDeleted)));
+        showSuccessSnackBar(context, t.mpvConfig.presetDeleted);
       }
     }
   }
