@@ -12,7 +12,8 @@ class GridSizeCalculator {
 
   /// Calculates the maximum cross-axis extent for grid items based on screen size and density
   static double getMaxCrossAxisExtent(BuildContext context, LibraryDensity density) {
-    final screenWidth = MediaQuery.of(context).size.width;
+    // Optimization: Use MediaQuery.sizeOf(context) to only rebuild when screen width changes.
+    final screenWidth = MediaQuery.sizeOf(context).width;
     final isDesktop = screenWidth > desktopBreakpoint;
     final isTablet = screenWidth > tabletBreakpoint && screenWidth <= desktopBreakpoint;
 
@@ -43,7 +44,8 @@ class GridSizeCalculator {
     LibraryDensity density,
     double horizontalPadding,
   ) {
-    final screenWidth = MediaQuery.of(context).size.width;
+    // Optimization: Use MediaQuery.sizeOf(context) to only rebuild when screen width changes.
+    final screenWidth = MediaQuery.sizeOf(context).width;
     final availableWidth = screenWidth - horizontalPadding;
 
     if (ScreenBreakpoints.isWideTabletOrLarger(screenWidth)) {
@@ -85,17 +87,20 @@ class GridSizeCalculator {
 
   /// Returns whether the current screen is a desktop-sized screen
   static bool isDesktop(BuildContext context) {
-    return MediaQuery.of(context).size.width > desktopBreakpoint;
+    // Optimization: Use MediaQuery.sizeOf(context) to only rebuild when screen width changes.
+    return MediaQuery.sizeOf(context).width > desktopBreakpoint;
   }
 
   /// Returns whether the current screen is a tablet-sized screen
   static bool isTablet(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
+    // Optimization: Use MediaQuery.sizeOf(context) to only rebuild when screen width changes.
+    final screenWidth = MediaQuery.sizeOf(context).width;
     return screenWidth > tabletBreakpoint && screenWidth <= desktopBreakpoint;
   }
 
   /// Returns whether the current screen is a mobile-sized screen
   static bool isMobile(BuildContext context) {
-    return MediaQuery.of(context).size.width <= tabletBreakpoint;
+    // Optimization: Use MediaQuery.sizeOf(context) to only rebuild when screen width changes.
+    return MediaQuery.sizeOf(context).width <= tabletBreakpoint;
   }
 }

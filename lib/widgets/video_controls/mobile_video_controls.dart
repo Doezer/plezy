@@ -253,7 +253,8 @@ class MobileVideoControls extends StatelessWidget {
     bool top = true,
     bool bottom = true,
   }) {
-    final orientation = MediaQuery.of(context).orientation;
+    // Optimization: Use MediaQuery.orientationOf(context) to only rebuild when orientation changes.
+    final orientation = MediaQuery.orientationOf(context);
     final isPortrait = orientation == Orientation.portrait;
 
     // Only apply SafeArea in portrait mode

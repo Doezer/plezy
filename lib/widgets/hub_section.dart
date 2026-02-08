@@ -313,6 +313,8 @@ class HubSectionState extends State<HubSection> {
                     builder: (scrollController) => ListView.builder(
                       controller: scrollController,
                       scrollDirection: Axis.horizontal,
+                      // Optimization: itemExtent improves performance by skipping child measurement.
+                      itemExtent: _itemExtent,
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
                       itemCount: widget.hub.items.length,
                       itemBuilder: (context, index) {

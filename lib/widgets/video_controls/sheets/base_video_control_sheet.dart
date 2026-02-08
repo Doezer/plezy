@@ -20,7 +20,8 @@ class BaseVideoControlSheet extends StatelessWidget {
 
   /// Get consistent bottom sheet constraints across all video control sheets
   static BoxConstraints getBottomSheetConstraints(BuildContext context) {
-    final size = MediaQuery.of(context).size;
+    // Optimization: Use MediaQuery.sizeOf(context) to only rebuild when screen size changes.
+    final size = MediaQuery.sizeOf(context);
     final isDesktop = size.width > 600;
 
     return BoxConstraints(
@@ -53,7 +54,8 @@ class BaseVideoControlSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     return SafeArea(
       child: SizedBox(
-        height: MediaQuery.of(context).size.height * 0.75,
+        // Optimization: Use MediaQuery.sizeOf(context) to only rebuild when screen size changes.
+        height: MediaQuery.sizeOf(context).height * 0.75,
         child: Column(
           children: [
             VideoSheetHeader(title: title, icon: icon, iconColor: iconColor, onBack: onBack),

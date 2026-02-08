@@ -1198,7 +1198,8 @@ class _FocusablePopupMenuState extends State<_FocusablePopupMenu> {
 
   @override
   Widget build(BuildContext context) {
-    final screenSize = MediaQuery.of(context).size;
+    // Optimization: Use MediaQuery.sizeOf(context) to only rebuild when screen size changes.
+    final screenSize = MediaQuery.sizeOf(context);
     const menuWidth = 220.0;
 
     // Calculate menu position, keeping it on screen

@@ -41,7 +41,8 @@ class _FileInfoBottomSheetState extends State<FileInfoBottomSheet> {
         ),
         child: SafeArea(
           child: SizedBox(
-            height: MediaQuery.of(context).size.height * 0.75,
+            // Optimization: Use MediaQuery.sizeOf(context) to only rebuild when screen size changes.
+            height: MediaQuery.sizeOf(context).height * 0.75,
             child: Column(
               children: [
                 // Header

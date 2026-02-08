@@ -775,7 +775,8 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   }
 
   Widget _buildOverlaidAppBar() {
-    final statusBarHeight = MediaQuery.of(context).padding.top;
+    // Optimization: Use MediaQuery.paddingOf(context) to only rebuild when padding changes.
+    final statusBarHeight = MediaQuery.paddingOf(context).top;
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -942,7 +943,8 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                     }
                     // Add top padding when hero is not shown
                     return SliverToBoxAdapter(
-                      child: SizedBox(height: kToolbarHeight + MediaQuery.of(context).padding.top + 16),
+                      // Optimization: Use MediaQuery.paddingOf(context) to only rebuild when padding changes.
+                      child: SizedBox(height: kToolbarHeight + MediaQuery.paddingOf(context).top + 16),
                     );
                   },
                 ),
@@ -1062,9 +1064,10 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   }
 
   Widget _buildHeroSection() {
-    final statusBarHeight = MediaQuery.of(context).padding.top;
+    // Optimization: Use specialized MediaQuery selectors to minimize rebuilds.
+    final statusBarHeight = MediaQuery.paddingOf(context).top;
     final useSideNav = PlatformDetector.shouldUseSideNavigation(context);
-    final heroHeight = useSideNav ? MediaQuery.of(context).size.height * 0.75 : 500 + statusBarHeight;
+    final heroHeight = useSideNav ? MediaQuery.sizeOf(context).height * 0.75 : 500 + statusBarHeight;
     return SliverToBoxAdapter(
       child: Focus(
         focusNode: _heroFocusNode,
@@ -1187,7 +1190,8 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   Widget _buildHeroItem(PlexMetadata heroItem) {
     final isEpisode = heroItem.isEpisode;
     final showName = heroItem.grandparentTitle ?? heroItem.title;
-    final screenWidth = MediaQuery.of(context).size.width;
+    // Optimization: Use MediaQuery.sizeOf(context) to only rebuild when screen size changes.
+    final screenWidth = MediaQuery.sizeOf(context).width;
     final isLargeScreen = ScreenBreakpoints.isWideTabletOrLarger(screenWidth);
 
     // Determine content type label for chip
@@ -1229,13 +1233,15 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                   child: Builder(
                     builder: (context) {
                       final client = _getClientForItem(heroItem);
-                      final mediaQuery = MediaQuery.of(context);
+                      // Optimization: Use specialized MediaQuery selectors to minimize rebuilds.
+                      final size = MediaQuery.sizeOf(context);
+                      final dpr = MediaQuery.devicePixelRatioOf(context);
                       final imageUrl = PlexImageHelper.getOptimizedImageUrl(
                         client: client,
                         thumbPath: heroItem.art ?? heroItem.grandparentArt,
-                        maxWidth: mediaQuery.size.width,
-                        maxHeight: mediaQuery.size.height * 0.7,
-                        devicePixelRatio: mediaQuery.devicePixelRatio,
+                        maxWidth: size.width,
+                        maxHeight: size.height * 0.7,
+                        devicePixelRatio: dpr,
                         imageType: ImageType.art,
                       );
 
@@ -1290,7 +1296,8 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                         child: Builder(
                           builder: (context) {
                             final client = _getClientForItem(heroItem);
-                            final dpr = MediaQuery.of(context).devicePixelRatio;
+                            // Optimization: Use MediaQuery.devicePixelRatioOf(context) to only rebuild when DPR changes.
+                            final dpr = MediaQuery.devicePixelRatioOf(context);
                             final logoUrl = PlexImageHelper.getOptimizedImageUrl(
                               client: client,
                               thumbPath: heroItem.clearLogo,

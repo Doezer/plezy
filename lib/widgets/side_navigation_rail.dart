@@ -296,7 +296,8 @@ class SideNavigationRailState extends State<SideNavigationRail> {
 
   /// Calculate top padding for macOS traffic lights
   double _getTopPadding(BuildContext context) {
-    double basePadding = MediaQuery.of(context).padding.top + 16;
+    // Optimization: Use MediaQuery.paddingOf(context) to only rebuild when padding changes.
+    double basePadding = MediaQuery.paddingOf(context).top + 16;
 
     // On macOS, add extra padding for traffic lights (when not fullscreen)
     if (Platform.isMacOS) {
@@ -313,8 +314,8 @@ class SideNavigationRailState extends State<SideNavigationRail> {
   @override
   Widget build(BuildContext context) {
     final t = tokens(context);
-    final hiddenLibrariesProvider = context.watch<HiddenLibrariesProvider>();
-    final hiddenKeys = hiddenLibrariesProvider.hiddenLibraryKeys;
+    // Optimization: Use context.select to only rebuild when hiddenLibraryKeys changes.
+    final hiddenKeys = context.select<HiddenLibrariesProvider, Set<String>>((p) => p.hiddenLibraryKeys);
 
     // Filter visible libraries
     final visibleLibraries = _libraries.where((lib) => !hiddenKeys.contains(lib.globalKey)).toList();

@@ -255,7 +255,8 @@ class PlexOptimizedImage extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final devicePixelRatio = MediaQuery.of(context).devicePixelRatio;
+        // Optimization: Use MediaQuery.devicePixelRatioOf(context) to only rebuild when DPR changes.
+        final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
 
         // Calculate effective constraints with safe fallbacks
         final effectiveWidth = resolvedDimension(width, constraints.maxWidth, 300.0);
