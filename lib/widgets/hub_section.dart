@@ -414,6 +414,9 @@ class HubSectionState extends State<HubSection> {
                     builder: (scrollController) => ListView.builder(
                       controller: scrollController,
                       scrollDirection: Axis.horizontal,
+                      // BOLT OPTIMIZATION: Use itemExtent to skip child measurement and improve scroll performance.
+                      // All items in this hub have a uniform width of cardWidth + 4px padding.
+                      itemExtent: _itemExtent,
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
                       itemCount: widget.hub.items.length,
                       itemBuilder: (context, index) {
