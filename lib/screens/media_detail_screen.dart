@@ -63,7 +63,6 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> with WatchStateAw
   late final ScrollController _scrollController;
   final ScrollController _seasonsScrollController = ScrollController();
   bool _watchStateChanged = false;
-  double _scrollOffset = 0;
 
   // Locked focus pattern for seasons
   int _focusedSeasonIndex = 0;
@@ -236,9 +235,8 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> with WatchStateAw
   }
 
   void _onScroll() {
-    setState(() {
-      _scrollOffset = _scrollController.offset;
-    });
+    // We no longer call setState here to avoid rebuilding the whole screen on every scroll.
+    // Instead, we use ListenableBuilder in the build method to listen to scroll changes.
   }
 
   @override
@@ -860,7 +858,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> with WatchStateAw
   void _scrollSeasonToIndex(int index, {bool animate = true}) {
     if (!_seasonsScrollController.hasClients) return;
 
-    final screenWidth = MediaQuery.of(context).size.width;
+    final screenWidth = MediaQuery.sizeOf(context).width;
     final cardWidth = screenWidth >= 1400
         ? 220.0
         : screenWidth >= 900
@@ -970,7 +968,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> with WatchStateAw
   /// Build horizontal seasons list for larger screens (>=600px)
   /// Uses locked focus pattern for D-pad centered scrolling
   Widget _buildHorizontalSeasons() {
-    final screenWidth = MediaQuery.of(context).size.width;
+    final screenWidth = MediaQuery.sizeOf(context).width;
     final cardWidth = screenWidth >= 1400
         ? 220.0
         : screenWidth >= 900
@@ -1327,7 +1325,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> with WatchStateAw
     }
 
     // Determine header height based on screen size
-    final size = MediaQuery.of(context).size;
+    final size = MediaQuery.sizeOf(context);
     final headerHeight = size.height * 0.6;
 
     final content = Focus(
@@ -1368,13 +1366,13 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> with WatchStateAw
 
                                   // Online - use network image
                                   final client = _getClientForMetadata(context);
-                                  final mediaQuery = MediaQuery.of(context);
+                                  final screenSize = MediaQuery.sizeOf(context);
                                   final dpr = PlexImageHelper.effectiveDevicePixelRatio(context);
                                   final imageUrl = PlexImageHelper.getOptimizedImageUrl(
                                     client: client,
                                     thumbPath: metadata.art,
-                                    maxWidth: mediaQuery.size.width,
-                                    maxHeight: mediaQuery.size.height * 0.6,
+                                    maxWidth: screenSize.width,
+                                    maxHeight: screenSize.height * 0.6,
                                     devicePixelRatio: dpr,
                                     imageType: ImageType.art,
                                   );
@@ -1677,7 +1675,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> with WatchStateAw
                     ),
                   ),
                 ),
-                SliverPadding(padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom)),
+                SliverPadding(padding: EdgeInsets.only(bottom: MediaQuery.paddingOf(context).bottom)),
               ],
             ),
             // Sticky top bar with fading background
@@ -1685,27 +1683,33 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> with WatchStateAw
               top: 0,
               left: 0,
               right: 0,
-              child: IgnorePointer(
-                ignoring: _scrollOffset < 50,
-                child: AnimatedOpacity(
-                  opacity: (_scrollOffset / 100).clamp(0.0, 1.0),
-                  duration: const Duration(milliseconds: 150),
-                  child: Container(
-                    height: MediaQuery.of(context).padding.top + 58,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Theme.of(context).scaffoldBackgroundColor.withValues(alpha: 0.8),
-                          Theme.of(context).scaffoldBackgroundColor.withValues(alpha: 0.5),
-                          Theme.of(context).scaffoldBackgroundColor.withValues(alpha: 0),
-                        ],
-                        stops: const [0.0, 0.3, 1.0],
+              child: ListenableBuilder(
+                listenable: _scrollController,
+                builder: (context, child) {
+                  final offset = _scrollController.hasClients ? _scrollController.offset : 0.0;
+                  return IgnorePointer(
+                    ignoring: offset < 50,
+                    child: AnimatedOpacity(
+                      opacity: (offset / 100).clamp(0.0, 1.0),
+                      duration: const Duration(milliseconds: 150),
+                      child: Container(
+                        height: MediaQuery.paddingOf(context).top + 58,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Theme.of(context).scaffoldBackgroundColor.withValues(alpha: 0.8),
+                              Theme.of(context).scaffoldBackgroundColor.withValues(alpha: 0.5),
+                              Theme.of(context).scaffoldBackgroundColor.withValues(alpha: 0),
+                            ],
+                            stops: const [0.0, 0.3, 1.0],
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ),
+                  );
+                },
               ),
             ),
             // Back button (always visible)

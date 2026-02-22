@@ -37,7 +37,7 @@ class PlexImageHelper {
   /// the platform-reported DPR doesn't reflect the true physical density
   /// (common on Linux X11 with compositor scaling).
   static double effectiveDevicePixelRatio(BuildContext context) {
-    final reportedDpr = MediaQuery.of(context).devicePixelRatio;
+    final reportedDpr = MediaQuery.devicePixelRatioOf(context);
     try {
       final displayWidth = View.of(context).display.size.width;
       // Scale quality with display resolution: 1920px = baseline (1.0x)

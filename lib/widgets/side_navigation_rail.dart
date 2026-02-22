@@ -263,7 +263,7 @@ class SideNavigationRailState extends State<SideNavigationRail> {
 
   /// Calculate top padding for macOS traffic lights
   double _getTopPadding(BuildContext context) {
-    double basePadding = MediaQuery.of(context).padding.top + 16;
+    double basePadding = MediaQuery.paddingOf(context).top + 16;
 
     // On macOS, add extra padding for traffic lights (when not fullscreen)
     if (Platform.isMacOS) {

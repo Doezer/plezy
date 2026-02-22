@@ -945,7 +945,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   }
 
   Widget _buildOverlaidAppBar() {
-    final statusBarHeight = MediaQuery.of(context).padding.top;
+    final statusBarHeight = MediaQuery.paddingOf(context).top;
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -1116,7 +1116,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                     }
                     // Add top padding when hero is not shown
                     return SliverToBoxAdapter(
-                      child: SizedBox(height: kToolbarHeight + MediaQuery.of(context).padding.top + 16),
+                      child: SizedBox(height: kToolbarHeight + MediaQuery.paddingOf(context).top + 16),
                     );
                   },
                 ),
@@ -1195,6 +1195,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                                 child: ListView.builder(
                                   scrollDirection: Axis.horizontal,
                                   itemCount: 5,
+                                  itemExtent: 152, // 140 width + 12 margin
                                   itemBuilder: (context, index) {
                                     return Container(
                                       margin: const EdgeInsets.only(right: 12),
@@ -1241,9 +1242,9 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   }
 
   Widget _buildHeroSection() {
-    final statusBarHeight = MediaQuery.of(context).padding.top;
+    final statusBarHeight = MediaQuery.paddingOf(context).top;
     final useSideNav = PlatformDetector.shouldUseSideNavigation(context);
-    final heroHeight = useSideNav ? MediaQuery.of(context).size.height * 0.75 : 500 + statusBarHeight;
+    final heroHeight = useSideNav ? MediaQuery.sizeOf(context).height * 0.75 : 500 + statusBarHeight;
     return SliverToBoxAdapter(
       child: Focus(
         focusNode: _heroFocusNode,
@@ -1387,7 +1388,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   Widget _buildHeroItem(PlexMetadata heroItem) {
     final isEpisode = heroItem.isEpisode;
     final showName = heroItem.grandparentTitle ?? heroItem.title;
-    final screenWidth = MediaQuery.of(context).size.width;
+    final screenWidth = MediaQuery.sizeOf(context).width;
     final isLargeScreen = ScreenBreakpoints.isWideTabletOrLarger(screenWidth);
 
     // Determine content type label for chip
@@ -1431,13 +1432,13 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                     child: Builder(
                       builder: (context) {
                         final client = _getClientForItem(heroItem);
-                        final mediaQuery = MediaQuery.of(context);
+                        final screenSize = MediaQuery.sizeOf(context);
                         final dpr = PlexImageHelper.effectiveDevicePixelRatio(context);
                         final imageUrl = PlexImageHelper.getOptimizedImageUrl(
                           client: client,
                           thumbPath: heroItem.art ?? heroItem.grandparentArt,
-                          maxWidth: mediaQuery.size.width,
-                          maxHeight: mediaQuery.size.height * 0.7,
+                          maxWidth: screenSize.width,
+                          maxHeight: screenSize.height * 0.7,
                           devicePixelRatio: dpr,
                           imageType: ImageType.art,
                         );

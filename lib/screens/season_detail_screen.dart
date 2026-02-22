@@ -289,7 +289,7 @@ class _SeasonDetailScreenState extends State<SeasonDetailScreen>
                   );
                 }, childCount: _episodes.length),
               ),
-            SliverPadding(padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom)),
+            SliverPadding(padding: EdgeInsets.only(bottom: MediaQuery.paddingOf(context).bottom)),
           ],
         ),
       ),

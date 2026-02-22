@@ -416,6 +416,7 @@ class HubSectionState extends State<HubSection> {
                       scrollDirection: Axis.horizontal,
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
                       itemCount: widget.hub.items.length,
+                      itemExtent: _itemExtent,
                       itemBuilder: (context, index) {
                         final item = widget.hub.items[index];
                         final isItemFocused = hasFocus && index == _focusedIndex;
