@@ -2707,9 +2707,6 @@ class Translations$discover$en {
 	/// en: 'Trailers & Extras'
 	String get extras => 'Trailers & Extras';
 
-	/// en: 'Known For'
-	String get knownFor => 'Known For';
-
 	/// en: 'Studio'
 	String get studio => 'Studio';
 

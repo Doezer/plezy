@@ -132,7 +132,11 @@ class _ActorMediaScreenState extends BaseMediaListDetailScreen<ActorMediaScreen>
         if (knownFor.items.isNotEmpty)
           MediaHub(
             id: 'actor:$personKey:knownFor',
-            title: t.discover.knownFor,
+            // Not localized via i18n: Plex Discover's own filmography group
+            // titles (below) come back in English regardless of app locale,
+            // so this shelf label matches that rather than standing out as
+            // the only translated string among them.
+            title: 'Known For',
             type: 'mixed',
             items: [for (final item in knownFor.items) item.toMediaItem()],
             size: knownFor.totalResults ?? knownFor.items.length,
