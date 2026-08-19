@@ -310,11 +310,7 @@ class PlexDiscoverClient {
   /// Appearances, Director, Producer, Writer, …) exactly as Discover groups
   /// it — order and grouping are the provider's, not re-derived here.
   Future<List<PlexDiscoverCreditGroup>> getPersonCredits(String personId) async {
-    final data = await _request(
-      'GET',
-      '/library/people/${Uri.encodeComponent(personId)}/credits',
-      allowNotFound: true,
-    );
+    final data = await _request('GET', '/library/people/${Uri.encodeComponent(personId)}/credits', allowNotFound: true);
     if (data == null) return const [];
     final container = _mediaContainer(data);
     return [
