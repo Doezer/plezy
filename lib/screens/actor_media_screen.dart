@@ -15,6 +15,7 @@ import '../mixins/paginated_item_loader.dart';
 import '../mixins/standard_paginated_view.dart';
 import '../providers/catalog_sources_provider.dart';
 import '../services/catalog/catalog_source.dart';
+import '../services/catalog/plex_catalog_source.dart';
 import '../utils/app_logger.dart';
 import '../utils/media_server_http_client.dart';
 import '../utils/provider_extensions.dart';
@@ -33,9 +34,6 @@ class ActorMediaScreen extends StatefulWidget {
   final String actorName;
   final String personId;
 
-  /// The person's stable cross-server identifier (Plex `tagKey`), when known.
-  /// Drives the "Known For"/filmography sections sourced from Plex Discover,
-  /// which is independent of [personId] (a local per-server tag id).
   final String? personKey;
   final String? actorThumb;
   final String? characterName;
@@ -74,6 +72,14 @@ class _ActorMediaScreenState extends BaseMediaListDetailScreen<ActorMediaScreen>
   List<MediaHub> _personHubs = const [];
   bool _personDataLoaded = false;
 
+  CatalogSourcesProvider? _catalogSources;
+
+  /// The Plex source [_loadPersonData] last attempted against, so a
+  /// [CatalogSourcesProvider] notification (session hydration completing,
+  /// a profile switch) only re-triggers the load when the source actually
+  /// changed, rather than on every unrelated provider notification.
+  PlexCatalogSource? _lastAttemptedPlexSource;
+
   @override
   MediaItem get mediaItem => MediaItem(
     id: '',
@@ -95,17 +101,31 @@ class _ActorMediaScreenState extends BaseMediaListDetailScreen<ActorMediaScreen>
   @override
   void initState() {
     super.initState();
+    _catalogSources = context.read<CatalogSourcesProvider?>();
+    _catalogSources?.addListener(_onCatalogSourcesChanged);
     unawaited(_loadPersonData());
   }
 
   @override
   void dispose() {
+    _catalogSources?.removeListener(_onCatalogSourcesChanged);
     disposePagination();
     disposeFocusResources();
     super.dispose();
   }
 
   MediaServerClient get _mediaClient => context.getMediaClientForServer(ServerId(widget.serverId));
+
+  /// Session hydration (or a profile switch) can create the Plex Discover
+  /// source after this screen has already given up on it once — retry then,
+  /// deduped by source identity so an unrelated provider notification (a
+  /// different account connecting) doesn't refetch.
+  void _onCatalogSourcesChanged() {
+    if (_personDataLoaded) return;
+    final source = _catalogSources?.plexSource;
+    if (source == null || identical(source, _lastAttemptedPlexSource)) return;
+    unawaited(_loadPersonData());
+  }
 
   /// Plex's cloud metadata for the person: the "Known For" shelf and the
   /// full filmography grouped by department (Actor, Director, Producer, …).
@@ -114,8 +134,9 @@ class _ActorMediaScreenState extends BaseMediaListDetailScreen<ActorMediaScreen>
   Future<void> _loadPersonData() async {
     final personKey = widget.personKey;
     if (widget.backend != MediaBackend.plex || personKey == null || personKey.isEmpty) return;
-    final source = context.read<CatalogSourcesProvider?>()?.plexSource;
+    final source = _catalogSources?.plexSource;
     if (source == null) return;
+    _lastAttemptedPlexSource = source;
 
     try {
       final results = await Future.wait([
