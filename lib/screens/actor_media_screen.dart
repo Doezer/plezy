@@ -1,17 +1,25 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../media/ids.dart';
 import 'package:material_symbols_icons/symbols.dart';
+import '../focus/locked_hub_controller.dart';
 import '../media/library_query.dart';
 import '../media/media_backend.dart';
+import '../media/media_hub.dart';
 import '../media/media_item.dart';
 import '../media/media_kind.dart';
 import '../media/media_server_client.dart';
 import '../mixins/paginated_item_loader.dart';
 import '../mixins/standard_paginated_view.dart';
+import '../providers/catalog_sources_provider.dart';
+import '../services/catalog/catalog_source.dart';
 import '../utils/app_logger.dart';
 import '../utils/media_server_http_client.dart';
 import '../utils/provider_extensions.dart';
 import '../widgets/desktop_app_bar.dart';
+import '../widgets/hub_section.dart';
 import '../widgets/optimized_media_image.dart';
 import '../utils/media_image_helper.dart';
 import '../i18n/strings.g.dart';
@@ -24,6 +32,11 @@ import '../focus/focusable_action_bar.dart';
 class ActorMediaScreen extends StatefulWidget {
   final String actorName;
   final String personId;
+
+  /// The person's stable cross-server identifier (Plex `tagKey`), when known.
+  /// Drives the "Known For"/filmography sections sourced from Plex Discover,
+  /// which is independent of [personId] (a local per-server tag id).
+  final String? personKey;
   final String? actorThumb;
   final String? characterName;
   final String serverId;
@@ -34,6 +47,7 @@ class ActorMediaScreen extends StatefulWidget {
     super.key,
     required this.actorName,
     required this.personId,
+    this.personKey,
     this.actorThumb,
     this.characterName,
     required this.serverId,
@@ -53,6 +67,12 @@ class _ActorMediaScreenState extends BaseMediaListDetailScreen<ActorMediaScreen>
         PaginatedItemUpdatable<ActorMediaScreen>,
         StandardPaginatedView<MediaItem, ActorMediaScreen> {
   static const int _pageSize = 200;
+  static const int _knownForLimit = 24;
+
+  final _hubFocusMemory = HubFocusMemory();
+  CatalogPersonInfo? _personInfo;
+  List<MediaHub> _personHubs = const [];
+  bool _personDataLoaded = false;
 
   @override
   MediaItem get mediaItem => MediaItem(
@@ -73,6 +93,12 @@ class _ActorMediaScreenState extends BaseMediaListDetailScreen<ActorMediaScreen>
   bool get hasItems => totalSize > 0;
 
   @override
+  void initState() {
+    super.initState();
+    unawaited(_loadPersonData());
+  }
+
+  @override
   void dispose() {
     disposePagination();
     disposeFocusResources();
@@ -80,6 +106,57 @@ class _ActorMediaScreenState extends BaseMediaListDetailScreen<ActorMediaScreen>
   }
 
   MediaServerClient get _mediaClient => context.getMediaClientForServer(ServerId(widget.serverId));
+
+  /// Plex's cloud metadata for the person: the "Known For" shelf and the
+  /// full filmography grouped by department (Actor, Director, Producer, …).
+  /// Best-effort — no session, no [ActorMediaScreen.personKey], or a request
+  /// failure all just leave the on-server grid as the whole screen.
+  Future<void> _loadPersonData() async {
+    final personKey = widget.personKey;
+    if (widget.backend != MediaBackend.plex || personKey == null || personKey.isEmpty) return;
+    final source = context.read<CatalogSourcesProvider?>()?.plexSource;
+    if (source == null) return;
+
+    try {
+      final results = await Future.wait([
+        source.fetchPersonInfo(personKey),
+        source.fetchPersonKnownFor(personKey, limit: _knownForLimit),
+        source.fetchPersonCredits(personKey),
+      ]);
+      if (!mounted) return;
+      final info = results[0] as CatalogPersonInfo?;
+      final knownFor = results[1] as CatalogPage;
+      final creditGroups = results[2] as List<CatalogCreditGroup>;
+
+      final hubs = <MediaHub>[
+        if (knownFor.items.isNotEmpty)
+          MediaHub(
+            id: 'actor:$personKey:knownFor',
+            title: t.discover.knownFor,
+            type: 'mixed',
+            items: [for (final item in knownFor.items) item.toMediaItem()],
+            size: knownFor.totalResults ?? knownFor.items.length,
+          ),
+        for (final group in creditGroups)
+          MediaHub(
+            id: 'actor:$personKey:credits:${group.type ?? group.title}',
+            title: group.title,
+            type: 'mixed',
+            items: [for (final credit in group.credits) credit.item.toMediaItem()],
+            size: group.credits.length,
+          ),
+      ];
+
+      setState(() {
+        _personInfo = info;
+        _personHubs = hubs;
+        _personDataLoaded = true;
+      });
+    } catch (error, stackTrace) {
+      appLogger.w('Failed to load Plex Discover person data', error: error, stackTrace: stackTrace);
+      if (mounted) setState(() => _personDataLoaded = true);
+    }
+  }
 
   @override
   Future<LibraryPage<MediaItem>> fetchPage(int start, int size, AbortController? abort) {
@@ -108,57 +185,86 @@ class _ActorMediaScreenState extends BaseMediaListDetailScreen<ActorMediaScreen>
 
   Widget _buildActorHeader() {
     final theme = Theme.of(context);
+    final summary = _personInfo?.summary;
     return SliverToBoxAdapter(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: .start,
           children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(40),
-              child: OptimizedMediaImage(
-                client: _mediaClient,
-                imagePath: widget.actorThumb,
-                width: 80,
-                height: 80,
-                fit: BoxFit.cover,
-                imageType: ImageType.avatar,
-                fallbackIcon: Symbols.person_rounded,
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: .start,
-                children: [
-                  Text(
-                    widget.actorName,
-                    style: theme.textTheme.headlineSmall?.copyWith(fontWeight: .bold),
-                    maxLines: 2,
-                    overflow: .ellipsis,
+            Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(40),
+                  child: OptimizedMediaImage(
+                    client: _mediaClient,
+                    imagePath: widget.actorThumb ?? _personInfo?.thumbUrl,
+                    width: 80,
+                    height: 80,
+                    fit: BoxFit.cover,
+                    imageType: ImageType.avatar,
+                    fallbackIcon: Symbols.person_rounded,
                   ),
-                  if (widget.characterName != null) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      widget.characterName!,
-                      style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                      maxLines: 1,
-                      overflow: .ellipsis,
-                    ),
-                  ],
-                  if (totalSize > 0) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      t.discover.titleCount(n: totalSize),
-                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                    ),
-                  ],
-                ],
-              ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: .start,
+                    children: [
+                      Text(
+                        widget.actorName,
+                        style: theme.textTheme.headlineSmall?.copyWith(fontWeight: .bold),
+                        maxLines: 2,
+                        overflow: .ellipsis,
+                      ),
+                      if (widget.characterName != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          widget.characterName!,
+                          style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                          maxLines: 1,
+                          overflow: .ellipsis,
+                        ),
+                      ],
+                      if (totalSize > 0) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          t.discover.titleCount(n: totalSize),
+                          style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
             ),
+            if (summary != null && summary.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(summary, style: theme.textTheme.bodyMedium, maxLines: 6, overflow: .ellipsis),
+            ],
           ],
         ),
       ),
     );
+  }
+
+  List<Widget> _buildPersonHubSlivers() {
+    return [
+      for (final hub in _personHubs)
+        if (hub.items.isNotEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: HubSection(
+                key: ValueKey(hub.id),
+                hub: hub,
+                focusMemory: _hubFocusMemory,
+                icon: Symbols.movie_rounded,
+                inset: true,
+              ),
+            ),
+          ),
+    ];
   }
 
   @override
@@ -175,6 +281,7 @@ class _ActorMediaScreenState extends BaseMediaListDetailScreen<ActorMediaScreen>
             onRefresh: updateItem,
             onSkeletonVisible: (index) => ensureIndexLoaded(index, pageSize: _pageSize),
           ),
+        if (_personDataLoaded) ..._buildPersonHubSlivers(),
       ],
     );
   }

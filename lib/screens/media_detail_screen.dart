@@ -1139,6 +1139,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen>
         builder: (_) => ActorMediaScreen(
           actorName: actor.tag,
           personId: personId,
+          personKey: actor.personKey,
           actorThumb: actor.thumbPath,
           characterName: actor.role,
           serverId: _metadata.serverId!,
