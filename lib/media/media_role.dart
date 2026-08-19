@@ -12,13 +12,6 @@ class MediaRole {
   final String tag;
   final String? role;
   final String? thumbPath;
-
-  /// The person's stable cross-server identifier (Plex `tagKey`), when the
-  /// backend's agent populated one. Distinct from [id], which is only a
-  /// local per-server tag id: on Plex this is the id used against
-  /// `discover.provider.plex.tv/library/people/{personKey}` for the person's
-  /// cloud "Known For"/filmography data, and is null for backends (or
-  /// unmatched libraries) with no such global identity.
   final String? personKey;
 
   const MediaRole({this.id, required this.tag, this.role, this.thumbPath, this.personKey});
