@@ -144,7 +144,11 @@ class _ActorMediaScreenState extends BaseMediaListDetailScreen<ActorMediaScreen>
         source.fetchPersonKnownFor(personKey, limit: _knownForLimit),
         source.fetchPersonCredits(personKey),
       ]);
-      if (!mounted) return;
+      // A profile switch or reconnect can rebind `_catalogSources.plexSource`
+      // to a different source while this fetch was in flight. If that
+      // happened, this call is stale — bail out rather than clobbering
+      // whatever the newer source's own load already produced.
+      if (!mounted || !identical(source, _catalogSources?.plexSource)) return;
       final info = results[0] as CatalogPersonInfo?;
       final knownFor = results[1] as CatalogPage;
       final creditGroups = results[2] as List<CatalogCreditGroup>;
@@ -179,7 +183,9 @@ class _ActorMediaScreenState extends BaseMediaListDetailScreen<ActorMediaScreen>
       });
     } catch (error, stackTrace) {
       appLogger.w('Failed to load Plex Discover person data', error: error, stackTrace: stackTrace);
-      if (mounted) setState(() => _personDataLoaded = true);
+      if (mounted && identical(source, _catalogSources?.plexSource)) {
+        setState(() => _personDataLoaded = true);
+      }
     }
   }
 
