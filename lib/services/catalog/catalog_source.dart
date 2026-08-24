@@ -150,6 +150,62 @@ abstract interface class CatalogHubSource {
   Future<CatalogPage> fetchHub(String id, {int page = 1, int limit = 25});
 }
 
+/// A person's cloud profile, independent of any one credit.
+class CatalogPersonInfo {
+  final String name;
+  final String? summary;
+  final String? thumbUrl;
+  final String? posterUrl;
+  final String? birthPlace;
+  final DateTime? bornAt;
+
+  /// Credit counts per department as the provider reports them (e.g. Plex
+  /// `CreditType`: Actor/165, Producer/1), in provider order.
+  final List<({String type, String title, int count})> creditCounts;
+
+  const CatalogPersonInfo({
+    required this.name,
+    this.summary,
+    this.thumbUrl,
+    this.posterUrl,
+    this.birthPlace,
+    this.bornAt,
+    this.creditCounts = const [],
+  });
+}
+
+/// One title in a person's filmography, with the role they played/held on it.
+class CatalogPersonCredit {
+  final String? role;
+  final CatalogItem item;
+
+  const CatalogPersonCredit({this.role, required this.item});
+}
+
+/// One department group of a person's filmography (Actor, Appearances,
+/// Director, Producer, Writer, …), in the provider's own grouping and order.
+class CatalogCreditGroup {
+  final String title;
+  final String? type;
+  final List<CatalogPersonCredit> credits;
+
+  const CatalogCreditGroup({required this.title, this.type, required this.credits});
+}
+
+/// Optional capability for catalog providers with a cloud "person" endpoint
+/// (bio + full filmography), independent of the user's own libraries.
+///
+/// [CatalogSource] stays library-scoped by default; only providers with a
+/// standalone person/actor profile (Plex Discover today) implement this.
+abstract interface class CatalogPersonSource {
+  Future<CatalogPersonInfo?> fetchPersonInfo(String personId);
+
+  /// The provider's own curated highlight shelf, e.g. Plex's "Known For".
+  Future<CatalogPage> fetchPersonKnownFor(String personId, {int limit = 24});
+
+  Future<List<CatalogCreditGroup>> fetchPersonCredits(String personId);
+}
+
 /// A pluggable external catalog provider backing the Explore tab (Trakt
 /// today; Overseerr/Jellyfin or MAL later).
 ///

@@ -147,6 +147,11 @@ class CatalogSourcesProvider extends ChangeNotifier with DisposableChangeNotifie
   /// [CatalogSource] interface.
   SeerrCatalogSource? get seerrSource => _seerr.source;
 
+  /// The connected Plex Discover source, for surfaces (the actor screen's
+  /// Known For/filmography) that need [CatalogPersonSource] beyond the
+  /// [CatalogSource] interface.
+  PlexCatalogSource? get plexSource => _plex.source;
+
   /// The source whose rows the Explore tab shows: the user's persisted pick
   /// when it is still connected, otherwise the first connected source.
   CatalogSource? get activeSource {

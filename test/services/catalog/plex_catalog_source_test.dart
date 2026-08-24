@@ -818,6 +818,160 @@ void main() {
       expect(requested, isFalse);
     });
 
+    test('fetchPersonInfo maps bio, images, and credit-department counts', () async {
+      late http.Request captured;
+      final source = PlexCatalogSource(
+        PlexDiscoverClient(
+          _session,
+          httpClient: MockClient((request) async {
+            captured = request;
+            return jsonResponse({
+              'MediaContainer': {
+                'Metadata': [
+                  {
+                    'title': 'Milly Alcock',
+                    'summary': 'An Australian actress.',
+                    'birthPlace': 'Sydney, New South Wales, Australia',
+                    'bornAt': '2000-04-11',
+                    'thumb': 'https://metadata-static.plex.tv/avatar.jpg',
+                    'Image': [
+                      {'type': 'avatar', 'url': 'https://metadata-static.plex.tv/avatar-variant.jpg'},
+                      {'type': 'coverPoster', 'url': 'https://metadata-static.plex.tv/poster.jpg'},
+                    ],
+                    'CreditType': [
+                      {'type': 'actor', 'title': 'Actor', 'count': 165},
+                      {'type': 'producer', 'title': 'Producer', 'count': 1},
+                    ],
+                  },
+                ],
+              },
+            });
+          }),
+        ),
+      );
+      addTearDown(source.dispose);
+
+      final info = await source.fetchPersonInfo('5d77705081ba41001faed47c');
+
+      expect(captured.method, 'GET');
+      expect(captured.url.path, '/library/people/5d77705081ba41001faed47c');
+      expect(info?.name, 'Milly Alcock');
+      expect(info?.summary, 'An Australian actress.');
+      expect(info?.birthPlace, 'Sydney, New South Wales, Australia');
+      expect(info?.bornAt, DateTime.parse('2000-04-11'));
+      // 'thumb' wins over the avatar Image variant when both are present.
+      expect(info?.thumbUrl, 'https://metadata-static.plex.tv/avatar.jpg');
+      expect(info?.posterUrl, 'https://metadata-static.plex.tv/poster.jpg');
+      expect(info?.creditCounts, [
+        (type: 'actor', title: 'Actor', count: 165),
+        (type: 'producer', title: 'Producer', count: 1),
+      ]);
+    });
+
+    test('fetchPersonInfo returns null on a 404 (no Discover profile for this person)', () async {
+      final source = PlexCatalogSource(
+        PlexDiscoverClient(_session, httpClient: MockClient((_) async => jsonResponse({}, status: 404))),
+      );
+      addTearDown(source.dispose);
+
+      expect(await source.fetchPersonInfo('missing'), isNull);
+    });
+
+    test('fetchPersonKnownFor pages with container params and maps items', () async {
+      late http.Request captured;
+      final source = PlexCatalogSource(
+        PlexDiscoverClient(
+          _session,
+          httpClient: MockClient((request) async {
+            captured = request;
+            return jsonResponse({
+              'MediaContainer': {
+                'totalSize': 8,
+                'Metadata': [
+                  _metadata(),
+                  _metadata(
+                    ratingKey: 'plex-show-1',
+                    type: 'show',
+                    title: 'House of the Dragon',
+                    imdb: 'tt11198330',
+                    tmdb: 94997,
+                  ),
+                ],
+              },
+            });
+          }),
+        ),
+      );
+      addTearDown(source.dispose);
+
+      final page = await source.fetchPersonKnownFor('5d77705081ba41001faed47c', limit: 24);
+
+      expect(captured.url.path, '/library/people/5d77705081ba41001faed47c/person_known_for');
+      expect(captured.url.queryParameters['includeMeta'], '1');
+      expect(captured.url.queryParameters['X-Plex-Container-Start'], '0');
+      expect(captured.url.queryParameters['X-Plex-Container-Size'], '24');
+      expect(page.items, hasLength(2));
+      expect(page.items.map((item) => item.title), ['Inception', 'House of the Dragon']);
+      expect(page.totalResults, 8);
+      expect(page.hasMore, isTrue);
+    });
+
+    test('fetchPersonCredits groups by department, maps roles, and dedupes items', () async {
+      late http.Request captured;
+      final source = PlexCatalogSource(
+        PlexDiscoverClient(
+          _session,
+          httpClient: MockClient((request) async {
+            captured = request;
+            return jsonResponse({
+              'MediaContainer': {
+                'CreditGroup': [
+                  {
+                    'title': 'Actor',
+                    'type': 'actor',
+                    'Credit': [
+                      {'role': 'Supergirl', 'Metadata': _metadata(title: 'Supergirl')},
+                      // Same item credited twice (e.g. a rewatched/rematched
+                      // entry) collapses to a single credit.
+                      {'role': 'Supergirl', 'Metadata': _metadata(title: 'Supergirl')},
+                    ],
+                  },
+                  {
+                    'title': 'Appearances',
+                    'type': 'appeared',
+                    'Credit': [
+                      {
+                        'role': 'Self',
+                        'Metadata': _metadata(
+                          ratingKey: 'plex-movie-2',
+                          title: 'Talk Show',
+                          imdb: 'tt0000002',
+                          tmdb: 22222,
+                        ),
+                      },
+                    ],
+                  },
+                ],
+              },
+            });
+          }),
+        ),
+      );
+      addTearDown(source.dispose);
+
+      final groups = await source.fetchPersonCredits('5d77705081ba41001faed47c');
+
+      expect(captured.url.path, '/library/people/5d77705081ba41001faed47c/credits');
+      expect(groups, hasLength(2));
+      expect(groups[0].title, 'Actor');
+      expect(groups[0].type, 'actor');
+      expect(groups[0].credits, hasLength(1), reason: 'the duplicate credit for the same item must be dropped');
+      expect(groups[0].credits.single.role, 'Supergirl');
+      expect(groups[0].credits.single.item.title, 'Supergirl');
+      expect(groups[1].title, 'Appearances');
+      expect(groups[1].credits.single.item.title, 'Talk Show');
+    });
+
     test('Discover requests have a bounded duration', () async {
       final response = Completer<http.Response>();
       final client = PlexDiscoverClient(

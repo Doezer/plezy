@@ -1,21 +1,18 @@
-import '../../media/media_rating.dart';
 import '../../media/media_kind.dart';
 import '../../models/catalog/catalog_cast_member.dart';
 import '../../models/catalog/catalog_item.dart';
-import '../../models/catalog/catalog_metadata.dart';
 import '../../utils/external_ids.dart';
 import '../../utils/app_logger.dart';
-import '../../utils/country_codes.dart';
 import '../../utils/json_utils.dart';
 import '../plex_discover_client.dart';
-import '../plex_mappers.dart';
 import 'catalog_source.dart';
 import 'catalog_watchlist_machinery.dart';
+import 'plex_discover_metadata_mapper.dart';
 
 /// [CatalogSource] backed by the active Plex profile's universal watchlist
 /// and Discover's Home shelves (what Plex's own web client shows on its
 /// Home ▸ Trending tab).
-class PlexCatalogSource with CatalogWatchlistMachinery implements CatalogSource, CatalogHubSource {
+class PlexCatalogSource with CatalogWatchlistMachinery implements CatalogSource, CatalogHubSource, CatalogPersonSource {
   final PlexDiscoverClient _client;
   final bool includeImageVariants;
   final Map<String, String> _hubKeys = {};
@@ -107,9 +104,9 @@ class PlexCatalogSource with CatalogWatchlistMachinery implements CatalogSource,
     // nothing to send it.
     if (!external.hasCatalogIds) return null;
     final metadata = await _client.match(external);
-    final matchedKind = metadata == null ? null : _kindFor(metadata['type']);
+    final matchedKind = metadata == null ? null : plexDiscoverKindFor(metadata['type']);
     if (metadata == null || matchedKind != kind) return null;
-    final ids = _idsFor(metadata);
+    final ids = plexDiscoverIdsFor(metadata);
     if (ids.plex == null) return null;
     return CatalogItemIds(
       plex: ids.plex,
@@ -215,176 +212,7 @@ class PlexCatalogSource with CatalogWatchlistMachinery implements CatalogSource,
     return items;
   }
 
-  CatalogItem? _toCatalogItem(Map<String, dynamic> metadata) {
-    final kind = _kindFor(metadata['type']);
-    final title = _nonEmptyString(metadata['title']);
-    final ids = _idsFor(metadata);
-    if (kind == null || title == null || ids.plex == null) return null;
-
-    final genres = _tagsFor(metadata['Genre']);
-    final studios = _tagsFor(metadata['Studio']);
-    final countries = _countriesFor(metadata['Country']);
-    final credits = _creditsFor(metadata);
-    final ratings = _ratingsFor(metadata);
-    final durationMs = flexibleInt(metadata['duration']);
-    final continuing = flexibleBoolNullable(metadata['isContinuingSeries']);
-    final nextAirDate = kind == MediaKind.show
-        ? _date(metadata['nextEpisodeOriginallyAvailableAt']) ?? _date(metadata['nextSeasonOriginallyAvailableAt'])
-        : null;
-
-    String? coverPoster;
-    String? coverArt;
-    String? background;
-    String? clearLogo;
-    String? clearLogoWide;
-    String? imageBanner;
-    for (final image in flexibleMapList(metadata['Image'])) {
-      final type = _nonEmptyString(image['type']);
-      final url = _nonEmptyString(image['url']);
-      if (type == null || url == null) continue;
-      switch (type) {
-        case 'coverPoster':
-          coverPoster ??= url;
-        case 'coverArt':
-          coverArt ??= url;
-        case 'background':
-          background ??= url;
-        case 'clearLogo':
-          clearLogo ??= url;
-        case 'clearLogoWide':
-          clearLogoWide ??= url;
-        case 'banner':
-          imageBanner ??= url;
-      }
-    }
-
-    final headlineRating = normalizedPlexRating(metadata['rating']);
-    final audienceRating = normalizedPlexRating(metadata['audienceRating']);
-    return CatalogItem(
-      source: CatalogSourceId.plex,
-      kind: kind,
-      title: title,
-      year: flexibleInt(metadata['year']),
-      overview: _overviewFor(metadata),
-      runtimeMinutes: durationMs == null ? null : Duration(milliseconds: durationMs).inMinutes,
-      rating: headlineRating ?? audienceRating,
-      genres: genres,
-      certification: _nonEmptyString(metadata['contentRating']),
-      airStatus: kind == MediaKind.show && continuing != null
-          ? continuing
-                ? CatalogAirStatus.airing
-                : CatalogAirStatus.ended
-          : null,
-      episodeCount: kind == MediaKind.show ? flexibleInt(metadata['leafCount']) : null,
-      network: _nonEmptyString(metadata['studio'] ?? metadata['network']),
-      ids: ids,
-      posterUrl: _nonEmptyString(metadata['thumb']) ?? coverPoster ?? coverArt,
-      backdropUrl: _nonEmptyString(metadata['art']) ?? background,
-      logoUrl: clearLogoWide ?? clearLogo,
-      bannerUrl: _nonEmptyString(metadata['banner']) ?? imageBanner,
-      ratings: ratings,
-      nextEpisode: nextAirDate == null ? null : CatalogNextEpisode(airsAt: nextAirDate),
-      releaseDate: _date(metadata['originallyAvailableAt']),
-      endDate: kind == MediaKind.show && continuing == false
-          ? _date(metadata['lastEpisodeOriginallyAvailableAt']) ?? _date(metadata['lastSeasonOriginallyAvailableAt'])
-          : null,
-      originalTitle: _nonEmptyString(metadata['originalTitle']),
-      tagline: _nonEmptyString(metadata['tagline']),
-      studios: studios,
-      countries: countries,
-      credits: credits,
-      contentAdvisory: _contentAdvisoryFor(metadata),
-      budget: flexibleInt(metadata['budget']),
-      revenue: flexibleInt(metadata['revenue']),
-    );
-  }
-
-  static List<String>? _tagsFor(Object? value) {
-    final tags = <String>[];
-    final seen = <String>{};
-    for (final entry in flexibleMapList(value)) {
-      final tag = _nonEmptyString(entry['tag'] ?? entry['name']);
-      if (tag != null && seen.add(tag)) tags.add(tag);
-    }
-    return tags.isEmpty ? null : tags;
-  }
-
-  static List<String>? _countriesFor(Object? value) {
-    final countries = <String>[];
-    final seen = <String>{};
-    for (final entry in flexibleMapList(value)) {
-      final tag = _nonEmptyString(entry['tag'] ?? entry['name']);
-      if (tag == null) continue;
-      final country = CountryCodes.normalizeCode(tag);
-      if (country.isNotEmpty && seen.add(country)) countries.add(country);
-    }
-    return countries.isEmpty ? null : countries;
-  }
-
-  static List<CatalogCredit>? _creditsFor(Map<String, dynamic> metadata) {
-    final credits = <CatalogCredit>[];
-    final seen = <String>{};
-
-    void addCredits(Object? value, CatalogCreditRole role) {
-      for (final entry in flexibleMapList(value)) {
-        final name = _nonEmptyString(entry['tag'] ?? entry['name'] ?? entry['role']);
-        if (name != null && seen.add('${role.name}\u0000$name')) {
-          credits.add(CatalogCredit(name: name, role: role));
-        }
-      }
-    }
-
-    addCredits(metadata['Director'], CatalogCreditRole.director);
-    addCredits(metadata['Writer'], CatalogCreditRole.writer);
-    addCredits(metadata['Producer'], CatalogCreditRole.producer);
-    return credits.isEmpty ? null : credits;
-  }
-
-  static List<MediaRatingSource>? _ratingsFor(Map<String, dynamic> metadata) => plexRatingSources(
-    rating: metadata['rating'],
-    ratingImage: metadata['ratingImage'],
-    audienceRating: metadata['audienceRating'],
-    audienceRatingImage: metadata['audienceRatingImage'],
-    ratingSources: [
-      for (final rating in flexibleMapList(metadata['Rating']))
-        (image: rating['image'], type: rating['type'], value: rating['value']),
-    ],
-    imdbVotes: flexibleInt(metadata['imdbRatingCount']),
-  );
-
-  static String? _overviewFor(Map<String, dynamic> metadata) {
-    var overview = _nonEmptyString(metadata['summary']);
-    for (final summary in flexibleMapList(metadata['Summary'])) {
-      final candidate = _nonEmptyString(summary['tag'] ?? summary['summary']);
-      if (candidate != null && (overview == null || candidate.length > overview.length)) {
-        overview = candidate;
-      }
-    }
-    return overview;
-  }
-
-  static String? _contentAdvisoryFor(Map<String, dynamic> metadata) {
-    final advisories = <String>[];
-    final seen = <String>{};
-    for (final commonSense in flexibleMapList(metadata['CommonSenseMedia'])) {
-      final oneLiner = _nonEmptyString(commonSense['oneLiner']);
-      int? age;
-      for (final rating in flexibleMapList(commonSense['AgeRating'])) {
-        age ??= flexibleInt(rating['age']);
-      }
-      final advisory = [if (age != null) '$age+', ?oneLiner].join(' · ');
-      if (advisory.isNotEmpty && seen.add(advisory)) advisories.add(advisory);
-    }
-    return advisories.isEmpty ? null : advisories.join('\n');
-  }
-
-  static DateTime? _date(Object? value) => value is String ? DateTime.tryParse(value) : null;
-
-  static MediaKind? _kindFor(Object? type) => switch (type) {
-    'movie' => MediaKind.movie,
-    'show' => MediaKind.show,
-    _ => null,
-  };
+  CatalogItem? _toCatalogItem(Map<String, dynamic> metadata) => plexDiscoverItemFromMetadata(metadata);
 
   static CatalogHubStyle? _hubStyleFor(Object? style) => switch (style) {
     'shelf' => CatalogHubStyle.shelf,
@@ -392,40 +220,69 @@ class PlexCatalogSource with CatalogWatchlistMachinery implements CatalogSource,
     _ => null,
   };
 
-  static CatalogItemIds _idsFor(Map<String, dynamic> metadata) {
-    String? imdb;
-    int? tmdb;
-    int? tvdb;
-
-    void consumeGuid(Object? value) {
-      final guid = _nonEmptyString(value);
-      if (guid == null) return;
-      final separator = guid.indexOf('://');
-      if (separator <= 0) return;
-      final provider = guid.substring(0, separator).toLowerCase();
-      final id = guid.substring(separator + 3);
-      switch (provider) {
-        case 'imdb':
-          imdb ??= id;
-        case 'tmdb':
-          tmdb ??= int.tryParse(id);
-        case 'tvdb':
-          tvdb ??= int.tryParse(id);
-      }
-    }
-
-    consumeGuid(metadata['guid']);
-    for (final guid in flexibleMapList(metadata['Guid'])) {
-      consumeGuid(guid['id']);
-    }
-
-    return CatalogItemIds(plex: _nonEmptyString(metadata['ratingKey']), imdb: imdb, tmdb: tmdb, tvdb: tvdb);
-  }
-
   static String? _nonEmptyString(Object? value) {
     final string = value?.toString().trim();
     return string == null || string.isEmpty ? null : string;
   }
+
+  @override
+  Future<CatalogPersonInfo?> fetchPersonInfo(String personId) async {
+    final metadata = await _client.getPersonInfo(personId);
+    if (metadata == null) return null;
+    final name = _nonEmptyString(metadata['title']);
+    if (name == null) return null;
+
+    String? avatar;
+    String? poster;
+    for (final image in flexibleMapList(metadata['Image'])) {
+      final type = _nonEmptyString(image['type']);
+      final url = _nonEmptyString(image['url']);
+      if (type == null || url == null) continue;
+      if (type == 'avatar') avatar ??= url;
+      if (type == 'coverPoster') poster ??= url;
+    }
+
+    return CatalogPersonInfo(
+      name: name,
+      summary: _nonEmptyString(metadata['summary']),
+      thumbUrl: _nonEmptyString(metadata['thumb']) ?? avatar,
+      posterUrl: poster,
+      birthPlace: _nonEmptyString(metadata['birthPlace']),
+      bornAt: _dateOnly(metadata['bornAt']),
+      creditCounts: [
+        for (final entry in flexibleMapList(metadata['CreditType']))
+          if (_nonEmptyString(entry['type']) case final String type)
+            if (_nonEmptyString(entry['title']) case final String title)
+              (type: type, title: title, count: flexibleInt(entry['count']) ?? 0),
+      ],
+    );
+  }
+
+  @override
+  Future<CatalogPage> fetchPersonKnownFor(String personId, {int limit = 24}) async {
+    final page = await _client.getPersonKnownFor(personId, limit: limit);
+    return CatalogPage(items: _fromMetadata(page.items), hasMore: page.hasMore, totalResults: page.totalResults);
+  }
+
+  @override
+  Future<List<CatalogCreditGroup>> fetchPersonCredits(String personId) async {
+    final groups = await _client.getPersonCredits(personId);
+    final result = <CatalogCreditGroup>[];
+    for (final group in groups) {
+      final credits = <CatalogPersonCredit>[];
+      final seen = <String>{};
+      for (final credit in group.credits) {
+        final item = _toCatalogItem(credit.metadata);
+        if (item != null && seen.add(item.identityKey)) {
+          credits.add(CatalogPersonCredit(role: credit.role, item: item));
+        }
+      }
+      if (credits.isNotEmpty) result.add(CatalogCreditGroup(title: group.title, type: group.type, credits: credits));
+    }
+    return result;
+  }
+
+  static DateTime? _dateOnly(Object? value) => value is String ? DateTime.tryParse(value) : null;
 
   @override
   void dispose() {
