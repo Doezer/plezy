@@ -15,7 +15,7 @@ import 'catalog_watchlist_machinery.dart';
 /// [CatalogSource] backed by the active Plex profile's universal watchlist
 /// and Discover's Home shelves (what Plex's own web client shows on its
 /// Home ▸ Trending tab).
-class PlexCatalogSource with CatalogWatchlistMachinery implements CatalogSource, CatalogHubSource {
+class PlexCatalogSource with CatalogWatchlistMachinery implements CatalogSource, CatalogHubSource, CatalogPersonSource {
   final PlexDiscoverClient _client;
   final bool includeImageVariants;
   final Map<String, String> _hubKeys = {};
@@ -432,6 +432,65 @@ class PlexCatalogSource with CatalogWatchlistMachinery implements CatalogSource,
     final string = value?.toString().trim();
     return string == null || string.isEmpty ? null : string;
   }
+
+  @override
+  Future<CatalogPersonInfo?> fetchPersonInfo(String personId) async {
+    final metadata = await _client.getPersonInfo(personId);
+    if (metadata == null) return null;
+    final name = _nonEmptyString(metadata['title']);
+    if (name == null) return null;
+
+    String? avatar;
+    String? poster;
+    for (final image in flexibleMapList(metadata['Image'])) {
+      final type = _nonEmptyString(image['type']);
+      final url = _nonEmptyString(image['url']);
+      if (type == null || url == null) continue;
+      if (type == 'avatar') avatar ??= url;
+      if (type == 'coverPoster') poster ??= url;
+    }
+
+    return CatalogPersonInfo(
+      name: name,
+      summary: _nonEmptyString(metadata['summary']),
+      thumbUrl: _nonEmptyString(metadata['thumb']) ?? avatar,
+      posterUrl: poster,
+      birthPlace: _nonEmptyString(metadata['birthPlace']),
+      bornAt: _dateOnly(metadata['bornAt']),
+      creditCounts: [
+        for (final entry in flexibleMapList(metadata['CreditType']))
+          if (_nonEmptyString(entry['type']) case final String type)
+            if (_nonEmptyString(entry['title']) case final String title)
+              (type: type, title: title, count: flexibleInt(entry['count']) ?? 0),
+      ],
+    );
+  }
+
+  @override
+  Future<CatalogPage> fetchPersonKnownFor(String personId, {int limit = 24}) async {
+    final page = await _client.getPersonKnownFor(personId, limit: limit);
+    return CatalogPage(items: _fromMetadata(page.items), hasMore: page.hasMore, totalResults: page.totalResults);
+  }
+
+  @override
+  Future<List<CatalogCreditGroup>> fetchPersonCredits(String personId) async {
+    final groups = await _client.getPersonCredits(personId);
+    final result = <CatalogCreditGroup>[];
+    for (final group in groups) {
+      final credits = <CatalogPersonCredit>[];
+      final seen = <String>{};
+      for (final credit in group.credits) {
+        final item = _toCatalogItem(credit.metadata);
+        if (item != null && seen.add(item.identityKey)) {
+          credits.add(CatalogPersonCredit(role: credit.role, item: item));
+        }
+      }
+      if (credits.isNotEmpty) result.add(CatalogCreditGroup(title: group.title, type: group.type, credits: credits));
+    }
+    return result;
+  }
+
+  static DateTime? _dateOnly(Object? value) => value is String ? DateTime.tryParse(value) : null;
 
   @override
   void dispose() {
