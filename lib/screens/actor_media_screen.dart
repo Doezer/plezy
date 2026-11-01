@@ -196,8 +196,7 @@ class _ActorMediaScreenState extends BaseMediaListDetailScreen<ActorMediaScreen>
   /// to a different source while a fetch against [source] was in flight. If
   /// that happened, the fetch is stale — callers should bail out rather than
   /// clobbering whatever the newer source's own load already produced.
-  bool _isStalePersonFetch(CatalogPersonSource source) =>
-      !mounted || !identical(source, _catalogSources?.personSource);
+  bool _isStalePersonFetch(CatalogPersonSource source) => !mounted || !identical(source, _catalogSources?.personSource);
 
   /// The connected catalog provider's cloud metadata for the person: the
   /// "Known For" shelf and the full filmography grouped by department
