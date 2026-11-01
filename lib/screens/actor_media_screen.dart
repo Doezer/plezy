@@ -17,7 +17,6 @@ import '../mixins/paginated_item_loader.dart';
 import '../mixins/standard_paginated_view.dart';
 import '../providers/catalog_sources_provider.dart';
 import '../services/catalog/catalog_source.dart';
-import '../services/catalog/plex_catalog_source.dart';
 import '../utils/app_logger.dart';
 import '../utils/error_message_utils.dart';
 import '../utils/media_server_http_client.dart';
@@ -79,11 +78,11 @@ class _ActorMediaScreenState extends BaseMediaListDetailScreen<ActorMediaScreen>
 
   CatalogSourcesProvider? _catalogSources;
 
-  /// The Plex source [_loadPersonData] last attempted against, so a
+  /// The person source [_loadPersonData] last attempted against, so a
   /// [CatalogSourcesProvider] notification (session hydration completing,
   /// a profile switch) only re-triggers the load when the source actually
   /// changed, rather than on every unrelated provider notification.
-  PlexCatalogSource? _lastAttemptedPlexSource;
+  CatalogPersonSource? _lastAttemptedPersonSource;
 
   /// Keeps a long biography to a readable line length on wide layouts.
   static const double _biographyMaxWidth = 800;
@@ -188,36 +187,38 @@ class _ActorMediaScreenState extends BaseMediaListDetailScreen<ActorMediaScreen>
   /// different account connecting) doesn't refetch.
   void _onCatalogSourcesChanged() {
     if (_personDataLoaded) return;
-    final source = _catalogSources?.plexSource;
-    if (source == null || identical(source, _lastAttemptedPlexSource)) return;
+    final source = _catalogSources?.personSource;
+    if (source == null || identical(source, _lastAttemptedPersonSource)) return;
     unawaited(_loadPersonData());
   }
 
-  /// Plex's cloud metadata for the person: the "Known For" shelf and the
-  /// full filmography grouped by department (Actor, Director, Producer, …).
-  /// Best-effort — no session, no [ActorMediaScreen.personKey], or a request
-  /// failure all just leave the on-server grid as the whole screen.
+  /// A profile switch or reconnect can rebind `_catalogSources.personSource`
+  /// to a different source while a fetch against [source] was in flight. If
+  /// that happened, the fetch is stale — callers should bail out rather than
+  /// clobbering whatever the newer source's own load already produced.
+  bool _isStalePersonFetch(CatalogPersonSource source) =>
+      !mounted || !identical(source, _catalogSources?.personSource);
+
+  /// The connected catalog provider's cloud metadata for the person: the
+  /// "Known For" shelf and the full filmography grouped by department
+  /// (Actor, Director, Producer, …). Best-effort — no connected source, no
+  /// [ActorMediaScreen.personKey], or a request failure all just leave the
+  /// on-server grid as the whole screen.
   Future<void> _loadPersonData() async {
     final personKey = widget.personKey;
-    if (widget.backend != MediaBackend.plex || personKey == null || personKey.isEmpty) return;
-    final source = _catalogSources?.plexSource;
+    if (personKey == null || personKey.isEmpty) return;
+    final source = _catalogSources?.personSource;
     if (source == null) return;
-    _lastAttemptedPlexSource = source;
+    _lastAttemptedPersonSource = source;
 
     try {
-      final results = await Future.wait([
-        source.fetchPersonInfo(personKey),
-        source.fetchPersonKnownFor(personKey, limit: _knownForLimit),
-        source.fetchPersonCredits(personKey),
-      ]);
-      // A profile switch or reconnect can rebind `_catalogSources.plexSource`
-      // to a different source while this fetch was in flight. If that
-      // happened, this call is stale — bail out rather than clobbering
-      // whatever the newer source's own load already produced.
-      if (!mounted || !identical(source, _catalogSources?.plexSource)) return;
-      final info = results[0] as CatalogPersonInfo?;
-      final knownFor = results[1] as CatalogPage;
-      final creditGroups = results[2] as List<CatalogCreditGroup>;
+      final infoFuture = source.fetchPersonInfo(personKey);
+      final knownForFuture = source.fetchPersonKnownFor(personKey, limit: _knownForLimit);
+      final creditGroupsFuture = source.fetchPersonCredits(personKey);
+      final info = await infoFuture;
+      final knownFor = await knownForFuture;
+      final creditGroups = await creditGroupsFuture;
+      if (_isStalePersonFetch(source)) return;
 
       final hubs = <MediaHub>[
         if (knownFor.items.isNotEmpty)
@@ -249,7 +250,7 @@ class _ActorMediaScreenState extends BaseMediaListDetailScreen<ActorMediaScreen>
       });
     } catch (error, stackTrace) {
       appLogger.w('Failed to load Plex Discover person data', error: error, stackTrace: stackTrace);
-      if (mounted && identical(source, _catalogSources?.plexSource)) {
+      if (!_isStalePersonFetch(source)) {
         setState(() => _personDataLoaded = true);
       }
     }
