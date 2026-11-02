@@ -1,5 +1,30 @@
 {
   "schemaVersion": 1,
-  "reviewedOn": "2026-10-15",
-  "accepted": []
+  "reviewedOn": "2026-11-02",
+  "accepted": [
+    {
+      "id": "1243067",
+      "package": "@sveltejs/kit",
+      "severity": "low",
+      "vulnerableRange": "<3.0.0",
+      "expiresOn": "2027-01-02",
+      "rationale": "Fix requires SvelteKit 3.0 (major bump from the pinned 2.x line); open redirect needs a crafted enhanced-form submission the site's forms don't use. Needs its own upgrade/test pass, not a CI hotfix."
+    },
+    {
+      "id": "1243076",
+      "package": "@sveltejs/kit",
+      "severity": "low",
+      "vulnerableRange": "<3.0.0",
+      "expiresOn": "2027-01-02",
+      "rationale": "Fix requires SvelteKit 3.0 (major bump from the pinned 2.x line); XSS needs an attacker-controlled Cache-Control header on a prerendered page, which this static site doesn't set per-request. Needs its own upgrade/test pass, not a CI hotfix."
+    },
+    {
+      "id": "1243505",
+      "package": "deepmerge",
+      "severity": "low",
+      "vulnerableRange": ">=4.2.0 <=4.3.1",
+      "expiresOn": "2027-01-02",
+      "rationale": "deepmerge 4.3.1 is the latest published version; no fixed release exists upstream yet. Pulled in transitively by @sveltejs/vite-plugin-svelte for build-time config merging only, never fed attacker-controlled input."
+    }
+  ]
 }
